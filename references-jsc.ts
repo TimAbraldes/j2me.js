@@ -7,6 +7,8 @@
 ///<reference path='vm/hashtable.ts' />
 ///<reference path='vm/parser.ts' />
 
+///<reference path='contextQueue.ts' />
+
 ///<reference path='options.ts' />
 ///<reference path='metrics.ts' />
 ///<reference path='bytecodes.ts' />
