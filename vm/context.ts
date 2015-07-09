@@ -317,6 +317,7 @@ module J2ME {
 
     id: number;
     priority: number = NORMAL_PRIORITY;
+    inheritedPriorities = new Set();
 
     /**
      * Whether or not the context is currently paused.  The profiler uses this
@@ -535,9 +536,25 @@ module J2ME {
       Scheduler.enqueue(this);
     }
 
+    getRealPriority() {
+      var ret = this.priority;
+
+      function updatePriority(value) {
+        if (value > ret) {
+          ret = value;
+        }
+      }
+
+      this.inheritedPriorities.forEach(updatePriority);
+      return ret;
+    }
+
     block(obj, queue, lockLevel) {
       obj._lock[queue].push(this);
       this.lockLevel = lockLevel;
+
+      obj._lock.ctx.inheritedPriorities.add(this);
+
       $.pause("block");
     }
 
@@ -575,6 +592,18 @@ module J2ME {
       if (lock && lock.level === 0) {
         lock.ctx = this;
         lock.level = 1;
+
+        for (var i = 0; i < lock.waiting.length; i++) {
+          if (lock.waiting[i]) {
+            this.inheritedPriorities.add(lock.waiting[i]);
+          }
+        }
+        for (var i = 0; i < lock.ready.length; i++) {
+          if (lock.ready[i]) {
+            this.inheritedPriorities.add(lock.ready[i]);
+          }
+        }
+
         return;
       }
       if (!lock) {
@@ -599,6 +628,18 @@ module J2ME {
       if (--lock.level > 0) {
         return;
       }
+
+      for (var i = 0; i < lock.waiting.length; i++) {
+        if (lock.waiting[i]) {
+          this.inheritedPriorities.delete(lock.waiting[i]);
+        }
+      }
+      for (var i = 0; i < lock.ready.length; i++) {
+        if (lock.ready[i]) {
+          this.inheritedPriorities.delete(lock.waiting[i]);
+        }
+      }
+
       this.unblock(object, "ready", false);
     }
 
