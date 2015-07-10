@@ -318,6 +318,7 @@ module J2ME {
     id: number;
     priority: number = NORMAL_PRIORITY;
     inheritedPriorities = new Set();
+    isGUIThread: boolean = false;
 
     /**
      * Whether or not the context is currently paused.  The profiler uses this
@@ -537,6 +538,10 @@ module J2ME {
     }
 
     getRealPriority() {
+      if (this.isGUIThread) {
+        return MAX_PRIORITY * 3;
+      }
+
       var ret = this.priority;
 
       function updatePriority(value) {

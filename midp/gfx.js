@@ -109,6 +109,8 @@ var currentlyFocusedTextEditor;
     }
 
     Native["com/sun/midp/lcdui/RepaintEventProducer.waitForAnimationFrame.()V"] = function() {
+        $.ctx.isGUIThread = true;
+
         if (hasNewFrame) {
             hasNewFrame = false;
             window.requestAnimationFrame(gotNewFrame);
