@@ -317,7 +317,6 @@ module J2ME {
     private methodInfo: MethodInfo;
     private parameters: string [];
     private hasHandlers: boolean;
-    private hasMonitorEnter: boolean;
     private blockStackHeightMap: number [];
     private initializedClasses: any;
     private referencedClasses: ClassInfo [];
@@ -356,7 +355,6 @@ module J2ME {
       this.referencedClasses = [];
       this.initializedClasses = null;
       this.hasHandlers = methodInfo.exception_table_length > 0;
-      this.hasMonitorEnter = false;
       this.blockStackHeightMap = [0];
       this.bodyEmitter = new Emitter(!release);
       this.blockEmitter = new Emitter(!release);
@@ -390,9 +388,6 @@ module J2ME {
       }
       if (variables.length > 0) {
         this.bodyEmitter.prependLn("var " + variables.join(",") + ";");
-      }
-      if (this.hasMonitorEnter) {
-        this.bodyEmitter.prependLn("var th=$.ctx.thread;");
       }
       return new CompiledMethodInfo(this.parameters, this.bodyEmitter.toString(), this.referencedClasses, this.hasOSREntryPoint ? this.blockMap.getOSREntryPoints() : []);
     }
@@ -1118,11 +1113,9 @@ module J2ME {
     }
 
     private emitMonitorEnter(emitter: Emitter, nextPC: number, object: string) {
-      this.hasMonitorEnter = true;
-
       this.needsVariable("lk");
       emitter.writeLn("lk=" + object + "._lock;");
-      emitter.enter("if(lk&&lk.level===0){lk.thread=th;lk.level=1;}else{ME(" + object + ");");
+      emitter.enter("if(lk&&lk.level===0){lk.ctx=$.ctx;lk.level=1;}else{ME(" + object + ");");
       this.emitUnwind(emitter, String(this.pc), String(nextPC), true);
       emitter.leave("}");
     }

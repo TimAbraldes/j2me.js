@@ -797,7 +797,7 @@ module J2ME {
     ready: Context [];
     waiting: Context [];
 
-    constructor(public thread: java.lang.Thread, public level: number) {
+    constructor(public ctx: Context, public level: number) {
       this.ready = [];
       this.waiting = [];
     }
