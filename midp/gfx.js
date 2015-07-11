@@ -97,6 +97,7 @@ var currentlyFocusedTextEditor;
     };
 
     var refreshStr = "refresh";
+    var framesToSkip = 1;
     Native["com/sun/midp/lcdui/DisplayDevice.refresh0.(IIIIII)V"] = function(hardwareId, displayId, x1, y1, x2, y2) {
         x1 = Math.max(0, x1);
         y1 = Math.max(0, y1);
@@ -118,10 +119,20 @@ var currentlyFocusedTextEditor;
         }
 
         var ctx = $.ctx;
-        window.requestAnimationFrame(function() {
-            MIDP.deviceContext.drawImage(offscreenCanvas, x1, y1, width, height, x1, y1, width, height);
-            J2ME.Scheduler.enqueue(ctx);
-        });
+        var frames = 0;
+
+        function actuallyPaint() {
+          if (frames++ < framesToSkip) {
+            window.requestAnimationFrame(actuallyPaint);
+            return;
+          }
+
+          MIDP.deviceContext.drawImage(offscreenCanvas, x1, y1, width, height, x1, y1, width, height);
+          J2ME.Scheduler.enqueue(ctx);
+        }
+
+        window.requestAnimationFrame(actuallyPaint);
+
         $.pause(refreshStr);
     };
 
