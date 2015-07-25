@@ -25,33 +25,41 @@ Native["java/lang/String.init.()V"] = function() {
 
 Native["java/lang/String.init.(Ljava/lang/String;)V"] = function(jStr) {
   if (!jStr) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
   this.str = jStr.str;
 };
 
 Native["java/lang/String.init.([C)V"] = function(chars) {
   if (!chars) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
   this.str = util.fromJavaChars(chars);
 };
 
 Native["java/lang/String.init.([CII)V"] = function(value, offset, count) {
   if (offset < 0 || count < 0 || offset > value.length - count) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   this.str = util.fromJavaChars(value, offset, count);
 };
 
 // Several constructors below share this implementation:
 function constructFromByteArray(bytes, off, len, enc) {
+  if (!bytes) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   enc = normalizeEncoding(enc);
   bytes = bytes.subarray(off, off + len);
   try {
     this.str = new TextDecoder(enc).decode(bytes);
   } catch(e) {
-    throw $.newUnsupportedEncodingException();
+    $.ctx.pushExceptionThrow(J2ME.UnsupportedEncodingExceptionStr);
+    return;
   }
 }
 
@@ -94,15 +102,22 @@ Native["java/lang/String.length.()I"] = function() {
 
 Native["java/lang/String.charAt.(I)C"] = function(index) {
   if (index < 0 || index >= this.str.length) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   return this.str.charCodeAt(index);
 };
 
 Native["java/lang/String.getChars.(II[CI)V"] = function(srcBegin, srcEnd, dst, dstBegin) {
+  if (null === dst) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
+
   if (srcBegin < 0 || srcEnd > this.str.length || srcBegin > srcEnd ||
       dstBegin + (srcEnd - srcBegin) > dst.length || dstBegin < 0) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   dst.set(util.stringToCharArray(this.str.substring(srcBegin, srcEnd)), dstBegin);
 };
@@ -122,7 +137,8 @@ Native["java/lang/String.getBytes.(Ljava/lang/String;)[B"] = function(jEnc) {
     var encoding = normalizeEncoding(jEnc.str);
     return new Int8Array(new TextEncoder(encoding).encode(this.str));
   } catch (e) {
-    throw $.newUnsupportedEncodingException();
+    $.ctx.pushExceptionThrow(J2ME.UnsupportedEncodingExceptionStr);
+    return;
   }
 };
 
@@ -139,6 +155,10 @@ Native["java/lang/String.equalsIgnoreCase.(Ljava/lang/String;)Z"] = function(ano
 };
 
 Native["java/lang/String.compareTo.(Ljava/lang/String;)I"] = function(anotherString) {
+  if (null === anotherString) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   // Sadly, JS String doesn't have a compareTo() method, so we must
   // replicate the Java algorithm. (There is String.localeCompare, but
   // that only returns {-1, 0, 1}, not a distance measure, which this
@@ -165,14 +185,26 @@ Native["java/lang/String.regionMatches.(ZILjava/lang/String;II)Z"] = function(ig
 };
 
 Native["java/lang/String.startsWith.(Ljava/lang/String;I)Z"] = function(prefix, toffset) {
+  if (null === prefix) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   return this.str.substr(toffset, prefix.str.length) === prefix.str ? 1 : 0;
 };
 
 Native["java/lang/String.startsWith.(Ljava/lang/String;)Z"] = function(prefix) {
+  if (null === prefix) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   return this.str.substr(0, prefix.str.length) === prefix.str ? 1 : 0;
 };
 
 Native["java/lang/String.endsWith.(Ljava/lang/String;)Z"] = function(suffix) {
+  if (null === suffix) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   return this.str.indexOf(suffix.str, this.str.length - suffix.str.length) !== -1 ? 1 : 0;
 };
 
@@ -201,28 +233,42 @@ Native["java/lang/String.lastIndexOf.(II)I"] = function(ch, fromIndex) {
 };
 
 Native["java/lang/String.indexOf.(Ljava/lang/String;)I"] = function(s) {
+  if (null === s) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   return this.str.indexOf(s.str);
 };
 
 Native["java/lang/String.indexOf.(Ljava/lang/String;I)I"] = function(s, fromIndex) {
+  if (null === s) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   return this.str.indexOf(s.str, fromIndex);
 };
 
 Native["java/lang/String.substring.(I)Ljava/lang/String;"] = function(beginIndex) {
   if (beginIndex < 0 || beginIndex > this.str.length) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   return J2ME.newString(this.str.substring(beginIndex));
 };
 
 Native["java/lang/String.substring.(II)Ljava/lang/String;"] = function(beginIndex, endIndex) {
   if (beginIndex < 0 || endIndex > this.str.length || beginIndex > endIndex) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   return J2ME.newString(this.str.substring(beginIndex, endIndex));
 };
 
 Native["java/lang/String.concat.(Ljava/lang/String;)Ljava/lang/String;"] = function(s) {
+  if (null === s) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   return J2ME.newString(this.str + s.str);
 };
 
@@ -277,14 +323,16 @@ Native["java/lang/String.toCharArray.()[C"] = function() {
 
 Native["java/lang/String.valueOf.([C)Ljava/lang/String;"] = function(chars) {
   if (!chars) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
   return J2ME.newString(util.fromJavaChars(chars));
 };
 
 Native["java/lang/String.valueOf.([CII)Ljava/lang/String;"] = function(chars, offset, count) {
   if (!chars) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
   return J2ME.newString(util.fromJavaChars(chars, offset, count));
 };
@@ -338,13 +386,18 @@ Native["java/lang/StringBuffer.init.()V"] = function() {
 
 Native["java/lang/StringBuffer.init.(I)V"] = function(length) {
   if (length < 0) {
-    throw $.newNegativeArraySizeException();
+    $.ctx.pushExceptionThrow(J2ME.NegativeArraySizeExceptionStr);
+    return;
   }
   this.buf = new Uint16Array(length);
   this.count = 0;
 };
 
 Native["java/lang/StringBuffer.init.(Ljava/lang/String;)V"] = function(jStr) {
+  if (null === jStr) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   var stringBuf = util.stringToCharArray(jStr.str);
   this.buf = new Uint16Array(stringBuf.length + 16); // Add 16, per the Java implementation.
   this.buf.set(stringBuf, 0);
@@ -390,7 +443,8 @@ Native["java/lang/StringBuffer.ensureCapacity.(I)V"] = function(minCapacity) {
 
 Native["java/lang/StringBuffer.setLength.(I)V"] = function(newLength) {
   if (newLength < 0) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
 
   if (newLength > this.buf.length) {
@@ -405,24 +459,32 @@ Native["java/lang/StringBuffer.setLength.(I)V"] = function(newLength) {
 
 Native["java/lang/StringBuffer.charAt.(I)C"] = function(index) {
   if (index < 0 || index >= this.count) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   return this.buf[index];
 };
 
 Native["java/lang/StringBuffer.getChars.(II[CI)V"] = function(srcBegin, srcEnd, dst, dstBegin) {
+  if (null === dst) {
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
+  }
   if (srcBegin < 0 || srcEnd < 0 || srcEnd > this.count || srcBegin > srcEnd) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   if (dstBegin + (srcEnd - srcBegin) > dst.length || dstBegin < 0) {
-    throw $.newArrayIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.ArrayIndexOutOfBoundsExceptionStr);
+    return;
   }
   dst.set(this.buf.subarray(srcBegin, srcEnd), dstBegin);
 };
 
 Native["java/lang/StringBuffer.setCharAt.(IC)V"] = function(index, ch) {
   if (index < 0 || index >= this.count) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   this.buf[index] = ch;
 };
@@ -438,7 +500,8 @@ Native["java/lang/StringBuffer.setCharAt.(IC)V"] = function(index, ch) {
  */
 function stringBufferAppend(data) {
   if (data == null) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
   if (!(data instanceof Uint16Array)) {
     data = util.stringToCharArray(data);
@@ -459,17 +522,20 @@ Native["java/lang/StringBuffer.append.(Ljava/lang/String;)Ljava/lang/StringBuffe
 
 Native["java/lang/StringBuffer.append.([C)Ljava/lang/StringBuffer;"] = function(chars) {
   if (chars == null) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
   return stringBufferAppend.call(this, chars);
 };
 
 Native["java/lang/StringBuffer.append.([CII)Ljava/lang/StringBuffer;"] = function(chars, offset, length) {
   if (chars == null) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
   if (offset < 0 || offset + length > chars.length) {
-    throw $.newArrayIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.ArrayIndexOutOfBoundsExceptionStr);
+    return;
   }
   return stringBufferAppend.call(this, chars.subarray(offset, offset + length));
 };
@@ -508,13 +574,15 @@ Native["java/lang/StringBuffer.append.(J)Ljava/lang/StringBuffer;"] = function(n
  */
 function stringBufferDelete(start, end) {
   if (start < 0) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   if (end > this.count) {
     end = this.count;
   }
   if (start > end) {
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
 
   var len = end - start;
@@ -531,7 +599,8 @@ Native["java/lang/StringBuffer.delete.(II)Ljava/lang/StringBuffer;"] = stringBuf
 Native["java/lang/StringBuffer.deleteCharAt.(I)Ljava/lang/StringBuffer;"] = function(index) {
   if (index >= this.count) {
     // stringBufferDelete handles the other boundary checks; this check is specific to deleteCharAt.
-    throw $.newStringIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+    return;
   }
   return stringBufferDelete.call(this, index, index + 1);
 };
@@ -546,10 +615,12 @@ Native["java/lang/StringBuffer.deleteCharAt.(I)Ljava/lang/StringBuffer;"] = func
  */
 function stringBufferInsert(offset, data) {
   if (data == null) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
   if (offset < 0 || offset > this.count) {
-    throw $.newArrayIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.ArrayIndexOutOfBoundsExceptionStr);
+    return;
   }
   if (!(data instanceof Uint16Array)) {
     data = util.stringToCharArray(data);

@@ -39,15 +39,18 @@ Native["com/nokia/mid/ui/frameanimator/FrameAnimator.init.()V"] = function() {
 
 Native["com/nokia/mid/ui/frameanimator/FrameAnimator.register.(IISSLcom/nokia/mid/ui/frameanimator/FrameAnimatorListener;)Z"] = function(x, y, maxFps, maxPps, listener) {
   if (this.nativeObject.isRegistered()) {
-    throw $.newIllegalStateException("FrameAnimator already registered");
+    $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr, "FrameAnimator already registered");
+    return;
   }
 
   if (!listener) {
-    throw $.newNullPointerException("listener is null");
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr, "listener is null");
+    return;
   }
 
   if (x < -65535 || x > 65535 || y < -65535 || y > 65535) {
-    throw $.newIllegalArgumentException("coordinate out of bounds");
+    $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "coordinate out of bounds");
+    return;
   }
 
   // XXX return false if FrameAnimator.numRegistered >= FRAME_ANIMATOR_MAX_CONCURRENT
@@ -58,7 +61,8 @@ Native["com/nokia/mid/ui/frameanimator/FrameAnimator.register.(IISSLcom/nokia/mi
 
 Native["com/nokia/mid/ui/frameanimator/FrameAnimator.unregister.()V"] = function() {
   if (!this.nativeObject.isRegistered()) {
-    throw $.newIllegalStateException("FrameAnimator not registered");
+    $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr, "FrameAnimator not registered");
+    return;
   }
 
   this.nativeObject.unregister();

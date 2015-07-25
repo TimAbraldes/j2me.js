@@ -42,7 +42,7 @@
   <!-- Load j2me.js separately because classes.jar.js depends on it (it adds
      - members to the AOTMD hash that j2me.js defines); and also so its source
      - map gets loaded by the debugger. -->
-  <script type="text/javascript" src="bld/j2me.js" defer></script>
+  <script type="text/javascript" src="bld/j2me.js"></script>
 
   <!-- Run `make aot` to generate these.  Load them separately, because adding
      - classes.jar.js to main-all.js fails silently for unknown reasons. -->
@@ -205,7 +205,6 @@
           <tr><td>Interpreter:</td><td><span id="interpreterCount"></span></td></tr>
           <tr><td>OSR:</td><td><span id="onStackReplacementCount"></span></td></tr>
           <tr><td>Unwind:</td><td><span id="unwindCount"></span></td></tr>
-          <tr><td>Preemption:</td><td><span id="preemptionCount"></span></td></tr>
         </table>
       </section>
       <section>

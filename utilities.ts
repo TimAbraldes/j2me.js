@@ -93,6 +93,7 @@ module J2ME {
       }
       if (!condition) {
         Debug.error(message.toString());
+        debugger;
       }
     }
 
@@ -127,24 +128,46 @@ module J2ME {
       return arrays;
     }
 
-    /**
-     * Pops elements from a source array into a destination array. This avoids
-     * allocations and should be faster. The elements in the destination array
-     * are pushed in the same order as they appear in the source array:
-     *
-     * popManyInto([1, 2, 3], 2, dst) => dst = [2, 3]
-     */
-    export function popManyInto(src: any [], count: number, dst: any []) {
-      release || assert(src.length >= count, "bad length in popManyInto");
-      for (var i = count - 1; i >= 0; i--) {
-        dst[i] = src.pop();
+    export function popArgsInto(src: any [], mi: MethodInfo, dst: any []) {
+      var argTypes = mi.signatureKinds;
+      var argCount = argTypes.length;
+
+      var srcIndex = src.length - mi.argumentSlots;
+      var dstIndex = dst.length;
+      var argIndex = 1;
+
+      dst.length += argCount - 1;
+
+      while (argIndex < argCount) {
+        dst[dstIndex++] = src[srcIndex++]
+        if (isTwoSlot(argTypes[argIndex++])) {
+          srcIndex++;
+        }
       }
-      dst.length = count;
+
+      src.length -= mi.consumeArgumentSlots;
+    }
+
+    export function popArgSlotsInto(src: any [], mi: MethodInfo, dst: any []) {
+      var count = mi.consumeArgumentSlots;
+
+      var srcIndex = src.length - count;
+      var dstIndex = dst.length;
+
+      dst.length += count;
+
+      while (srcIndex < src.length) {
+        dst[dstIndex++] = src[srcIndex++];
+      }
+
+      src.length -= count;
     }
 
     export function pushMany(dst: any [], src: any []) {
+      var oldDstLen = dst.length;
+      dst.length += src.length;
       for (var i = 0; i < src.length; i++) {
-        dst.push(src[i]);
+        dst[i + oldDstLen] = src[i];
       }
     }
 

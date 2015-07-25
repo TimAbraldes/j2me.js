@@ -120,9 +120,9 @@ var currentlyFocusedTextEditor;
         var ctx = $.ctx;
         window.requestAnimationFrame(function() {
             MIDP.deviceContext.drawImage(offscreenCanvas, x1, y1, width, height, x1, y1, width, height);
-            J2ME.Scheduler.enqueue(ctx);
+            ctx.resume();
         });
-        $.pause(refreshStr);
+        ctx.pause(refreshStr);
     };
 
     function swapRB(pixel) {
@@ -241,8 +241,7 @@ var currentlyFocusedTextEditor;
             }
             img.onerror = function(e) {
                URL.revokeObjectURL(img.src);
-               ctx.setAsCurrentContext();
-               reject($.newIllegalArgumentException("error decoding image"));
+               reject({ name: J2ME.IllegalArgumentExceptionStr, msg: "error decoding image" });
             }
         }));
     };
@@ -385,7 +384,7 @@ var currentlyFocusedTextEditor;
             var methodInfo = classInfo.getMethodByNameString("<init>", "(III)V", false);
             J2ME.preemptionLockLevel++;
             J2ME.getLinkedMethod(methodInfo).call(defaultFont, 0, 0, 0);
-            release || J2ME.Debug.assert(!$.ctx.U, "Unexpected unwind during createException.");
+            release || J2ME.Debug.assert(!$.ctx.U, "Unexpected unwind during getDefaultfont.");
             J2ME.preemptionLockLevel--;
         }
         return defaultFont;
@@ -435,7 +434,8 @@ var currentlyFocusedTextEditor;
         } else if (anchor & BASELINE) {
             c.textBaseline = "alphabetic";
         } else if (anchor & VCENTER) {
-            throw $.newIllegalArgumentException("VCENTER not allowed with text");
+            $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "VCENTER not allowed with text");
+            return;
         } else {
             c.textBaseline = "top";
         }
@@ -510,7 +510,8 @@ var currentlyFocusedTextEditor;
 
     Native["javax/microedition/lcdui/Graphics.copyArea.(IIIIIII)V"] = function(x_src, y_src, width, height, x_dest, y_dest, anchor) {
         if (isScreenGraphics(this)) {
-            throw $.newIllegalStateException();
+            $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr);
+            return;
         }
         console.warn("javax/microedition/lcdui/Graphics.copyArea.(IIIIIII)V not implemented");
     };
@@ -573,7 +574,8 @@ var currentlyFocusedTextEditor;
         if ((red < 0)   || (red > 255)
             || (green < 0) || (green > 255)
             || (blue < 0)  || (blue > 255)) {
-            throw $.newIllegalArgumentException("Value out of range");
+            $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "Value out of range");
+            return;
         }
 
         this.info.setPixel(0xFF, red, green, blue);
@@ -597,7 +599,8 @@ var currentlyFocusedTextEditor;
 
     Native["javax/microedition/lcdui/Graphics.setGrayScale.(I)V"] = function(value) {
         if ((value < 0) || (value > 255)) {
-            throw $.newIllegalArgumentException("Gray value out of range");
+            $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "Gray value out of range");
+            return;
         }
 
         // NOTE: One would probably expect that `Graphics.setGrayScale`
@@ -623,7 +626,8 @@ var currentlyFocusedTextEditor;
     var DOTTED = 1;
     Native["javax/microedition/lcdui/Graphics.setStrokeStyle.(I)V"] = function(style) {
         if ((style !== SOLID) && (style !== DOTTED)) {
-            throw $.newIllegalArgumentException("Invalid stroke style");
+            $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "Invalid stroke style");
+            return;
         }
 
         // We don't actually implement DOTTED style so this is a no-op
@@ -679,7 +683,8 @@ var currentlyFocusedTextEditor;
     Native["com/nokia/mid/ui/DirectGraphicsImp.getPixels.([SIIIIIII)V"] =
     function(pixels, offset, scanlength, x, y, width, height, format) {
         if (pixels === null) {
-            throw $.newNullPointerException("Pixels array is null");
+            $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr, "Pixels array is null");
+            return;
         }
 
         var converterFunc = null;
@@ -688,7 +693,8 @@ var currentlyFocusedTextEditor;
         } else if (format === TYPE_USHORT_565_RGB) {
             converterFunc = ABGRToRGB565;
         } else {
-            throw $.newIllegalArgumentException("Format unsupported");
+            $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "Format unsupported");
+            return;
         }
 
         var context = this.graphics.info.contextInfo.context;
@@ -699,14 +705,16 @@ var currentlyFocusedTextEditor;
     Native["com/nokia/mid/ui/DirectGraphicsImp.drawPixels.([SZIIIIIIII)V"] =
     function(pixels, transparency, offset, scanlength, x, y, width, height, manipulation, format) {
         if (pixels === null) {
-            throw $.newNullPointerException("Pixels array is null");
+            $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr, "Pixels array is null");
+            return;
         }
 
         var converterFunc = null;
         if (format === TYPE_USHORT_4444_ARGB && transparency && !manipulation) {
             converterFunc = ARGB4444ToABGR;
         } else {
-            throw $.newIllegalArgumentException("Format unsupported");
+            $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "Format unsupported");
+            return;
         }
 
         var graphics = this.graphics;
@@ -734,7 +742,8 @@ var currentlyFocusedTextEditor;
 
     Native["javax/microedition/lcdui/Graphics.drawRegion.(Ljavax/microedition/lcdui/Image;IIIIIIII)V"] = function(src, x_src, y_src, width, height, transform, x_dest, y_dest, anchor) {
         if (null === src) {
-            throw $.newNullPointerException("src image is null");
+            $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr, "src image is null");
+            return;
         }
 
         renderRegion(this.info.getGraphicsContext(), src.imageData.contextInfo.context.canvas, x_src, y_src, width, height,
@@ -743,7 +752,8 @@ var currentlyFocusedTextEditor;
 
     Native["javax/microedition/lcdui/Graphics.drawImage.(Ljavax/microedition/lcdui/Image;III)V"] = function(image, x, y, anchor) {
         if (image === null) {
-            throw $.newNullPointerException("image is null");
+            $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr, "image is null");
+            return;
         }
 
         renderRegion(this.info.getGraphicsContext(), image.imageData.contextInfo.context.canvas, 0, 0, image.imageData.width, image.imageData.height, TRANS_NONE, x, y, anchor);
@@ -1368,7 +1378,8 @@ var currentlyFocusedTextEditor;
 
     Native["com/nokia/mid/ui/TextEditor.setCaret.(I)V"] = function(index) {
         if (index < 0 || index > this.textEditor.getContentSize()) {
-            throw $.newStringIndexOutOfBoundsException();
+            $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr);
+            return;
         }
 
         this.setCaretPosition(index);
@@ -1412,7 +1423,8 @@ var currentlyFocusedTextEditor;
         var str = J2ME.fromJavaString(jStr);
         var len = util.toCodePointArray(str).length;
         if (this.textEditor.getContentSize() + len > this.textEditor.getAttribute("maxlength")) {
-            throw $.newIllegalArgumentException();
+            $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr);
+            return;
         }
         this.textEditor.setContent(this.textEditor.getSlice(0, pos) + str + this.textEditor.getSlice(pos));
         this.setCaretPosition(pos + len);
@@ -1423,7 +1435,8 @@ var currentlyFocusedTextEditor;
 
         var size = this.textEditor.getContentSize();
         if (offset < 0 || offset > size || length < 0 || offset + length > size) {
-            throw $.newStringIndexOutOfBoundsException("offset/length invalid");
+            $.ctx.pushExceptionThrow(J2ME.StringIndexOutOfBoundsExceptionStr, "offset/length invalid");
+            return;
         }
 
         this.textEditor.setContent(this.textEditor.getSlice(0, offset) + this.textEditor.getSlice(offset + length));

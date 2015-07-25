@@ -10,7 +10,6 @@ module J2ME {
 
   import Bytecodes = Bytecode.Bytecodes;
   import assert = Debug.assert;
-  import popManyInto = ArrayUtilities.popManyInto;
 
   export var interpreterCounter = null; // new Metrics.Counter(true);
   export var interpreterMethodCounter = new Metrics.Counter(true);
@@ -26,66 +25,10 @@ module J2ME {
     traceWriter.writeLn(toDebugString(array) + "[" + index + "] (" + toDebugString(array[index]) + ")");
   }
 
-  function classInitAndUnwindCheck(classInfo: ClassInfo, pc: number) {
-    classInitCheck(classInfo);
-    if ($.ctx.U) {
-      $.ctx.current().pc = pc;
-      return;
-    } 
-  }
-
-  /**
-   * Optimize method bytecode.
-   */
-  function optimizeMethodBytecode(methodInfo: MethodInfo) {
-    interpreterCounter && interpreterCounter.count("optimize: " + methodInfo.implKey);
-    var stream = new BytecodeStream(methodInfo.codeAttribute.code);
-    while (stream.currentBC() !== Bytecodes.END) {
-      if (stream.rawCurrentBC() === Bytecodes.WIDE) {
-        stream.next();
-        continue;
-      }
-      switch (stream.currentBC()) {
-        case Bytecodes.ALOAD:
-          if (stream.nextBC() === Bytecodes.ILOAD) {
-            stream.writeCurrentBC(Bytecodes.ALOAD_ILOAD);
-          }
-          break;
-        case Bytecodes.IINC:
-          if (stream.nextBC() === Bytecodes.GOTO) {
-           stream.writeCurrentBC(Bytecodes.IINC_GOTO);
-          }
-          break;
-        case Bytecodes.ARRAYLENGTH:
-          if (stream.nextBC() === Bytecodes.IF_ICMPGE) {
-            stream.writeCurrentBC(Bytecodes.ARRAYLENGTH_IF_ICMPGE);
-          }
-          break;
-      }
-      stream.next();
-    }
-    methodInfo.isOptimized = true;
-  }
-
   function resolveClass(index: number, classInfo: ClassInfo): ClassInfo {
     var classInfo = classInfo.constantPool.resolveClass(index);
     linkKlass(classInfo);
     return classInfo;
-  }
-
-  /**
-   * Debugging helper to make sure native methods were implemented correctly.
-   */
-  function checkReturnValue(methodInfo: MethodInfo, returnValue: any) {
-    if ($.ctx.U) {
-      if (typeof returnValue !== "undefined") {
-        assert(false, "Expected undefined return value during unwind, got " + returnValue + " in " + methodInfo.implKey);
-      }
-      return;
-    }
-    if (!(getKindCheck(methodInfo.returnKind)(returnValue))) {
-      assert(false, "Expected " + Kind[methodInfo.returnKind] + " return value, got " + returnValue + " in " + methodInfo.implKey);
-    }
   }
 
   /**
@@ -100,11 +43,6 @@ module J2ME {
 
   export var onStackReplacementCount = 0;
 
-  /**
-   * Temporarily used for fn.apply.
-   */
-  var argArray = [];
-
   function buildExceptionLog(ex, stackTrace) {
     var classInfo: ClassInfo = ex.klass.classInfo;
     var className = classInfo.getClassNameSlow();
@@ -117,7 +55,6 @@ module J2ME {
   function tryCatch(e) {
     var ctx = $.ctx;
     var frame = ctx.current();
-    var stack = frame.stack;
 
     var exClass = e.class;
     if (!e.stackTrace) {
@@ -126,7 +63,8 @@ module J2ME {
 
     var stackTrace = e.stackTrace;
 
-    do {
+    while (frame) {
+      var stack = frame.stack;
       var handler_pc = null;
 
       for (var i = 0; i < frame.methodInfo.exception_table_length; i++) {
@@ -136,23 +74,13 @@ module J2ME {
             handler_pc = exceptionEntryView.handler_pc;
             break;
           } else {
-            classInfo = resolveClass(exceptionEntryView.catch_type, frame.methodInfo.classInfo);
-            if (isAssignableTo(e.klass, classInfo.klass)) {
+            var ci = resolveClass(exceptionEntryView.catch_type, frame.methodInfo.classInfo);
+            if (isAssignableTo(e.klass, ci.klass)) {
               handler_pc = exceptionEntryView.handler_pc;
               break;
             }
           }
         }
-      }
-
-      var classInfo = frame.methodInfo.classInfo;
-      if (classInfo && classInfo.getClassNameSlow()) {
-        stackTrace.push({
-          className: classInfo.getClassNameSlow(),
-          methodName: frame.methodInfo.name,
-          methodSignature: frame.methodInfo.signature,
-          offset: frame.pc
-        });
       }
 
       if (handler_pc != null) {
@@ -169,13 +97,9 @@ module J2ME {
       frame.free();
       ctx.popFrame();
       frame = ctx.current();
-      if (Frame.isMarker(frame)) {
-        break;
-      }
-      stack = frame.stack;
-    } while (true);
+    }
 
-    if (ctx.current() === Frame.Start) {
+    ctx.stop();
       ctx.kill();
       if (ctx.thread && ctx.thread._lock && ctx.thread._lock.waiting.length > 0) {
         console.error(buildExceptionLog(e, stackTrace));
@@ -186,124 +110,51 @@ module J2ME {
         }
       }
       throw new Error(buildExceptionLog(e, stackTrace));
-    } else {
-      throw e;
-    }
   }
 
   export function interpret() {
-    var ctx = $.ctx;
-
-    // These must always be kept up to date with the current frame.
-    var frame = ctx.current();
-    release || assert (!Frame.isMarker(frame), "interpret called on marker frame");
-    var mi = frame.methodInfo;
-    var ci = mi.classInfo;
-    var rp = ci.constantPool.resolved;
-    var stack = frame.stack;
-
-
-    var returnValue = null;
-
-
-    var traceBytecodes = false;
-    var traceSourceLocation = true;
-
-    var index: any, value: any, constant: any;
-    var a: any, b: any, c: any;
-    var pc: number;
-
-    /**
-     * This is used to detect backwards branches for the purpose of on stack replacement.
-     */
-    var lastPC: number = -1;
-
-    var type;
-    var size;
-
-    var array: any;
-    var object: java.lang.Object;
-    var fieldInfo: FieldInfo;
-    var classInfo: ClassInfo;
-
-    // We don't want to optimize methods for interpretation if we're going to be using the JIT until
-    // we teach the Baseline JIT about the new bytecodes.
-    if (!enableRuntimeCompilation && !frame.methodInfo.isOptimized && frame.methodInfo.stats.bytecodeCount > 100) {
-      optimizeMethodBytecode(frame.methodInfo);
-    }
-
-    mi.stats.interpreterCallCount ++;
-
     interpreterCount ++;
 
-    while (true) {
-      bytecodeCount ++;
-      mi.stats.bytecodeCount ++;
+    // TODO: Find the right place for this now
+        // TODO: Make sure this works even if we JIT everything. At the moment it fails
+        // for synthetic method frames which have bad max_local counts.
+        // Inline heuristics that trigger JIT compilation here.
+        //        if ((enableRuntimeCompilation &&
+        //             mi.state < MethodState.Compiled && // Give up if we're at this state.
+        //             mi.stats.backwardsBranchCount + mi.stats.interpreterCallCount > 10) ||
+        //            config.forceRuntimeCompilation) {
+        //          compileAndLinkMethod(mi);
+        //        }
 
-      // TODO: Make sure this works even if we JIT everything. At the moment it fails
-      // for synthetic method frames which have bad max_local counts.
+    var ctx = $.ctx;
+    var frame = ctx.current();
+    if (!frame) {
+      ctx.stop();
+      return;
+    }
+    if (ctx.U) {
+      return;
+    }
+    var stack = frame.stack;
+    var op: Bytecodes;
+    var a: any, b: any, c: any, d: any;
+    var fi: FieldInfo;
+    var ci: ClassInfo;
 
-      // Inline heuristics that trigger JIT compilation here.
-      if ((enableRuntimeCompilation &&
-           mi.state < MethodState.Compiled && // Give up if we're at this state.
-           mi.stats.backwardsBranchCount + mi.stats.interpreterCallCount > 10) ||
-          config.forceRuntimeCompilation) {
-        compileAndLinkMethod(mi);
-      }
+    // TODO: It's harder to account for this now. Do we care?
+    // mi.stats.interpreterCallCount ++;
 
-      try {
-        if (frame.pc < lastPC) {
-          mi.stats.backwardsBranchCount ++;
-          if (enableOnStackReplacement && mi.state === MethodState.Compiled) {
-            // Just because we've jumped backwards doesn't mean we are at a loop header but it does mean that we are
-            // at the beggining of a basic block. This is a really cheap test and a convenient place to perform an
-            // on stack replacement.
+    // NB: This loop is the heart of our JVM. It is run very frequently
+    // and it MUST BE VERY FAST. Any logic that is placed in this loop is
+    // likely to affect performance.
+    do {
+        frame.opPC = frame.pc;
+        op = frame.read8();
 
-            if (mi.onStackReplacementEntryPoints.indexOf(frame.pc) > -1) {
-              onStackReplacementCount++;
+        //console.log(frame.methodInfo.implKey + (frame.methodInfo.isNative ? " (native)" : "") + ". pc=" + frame.pc + ". op=" + op + ". stack length=" + stack.length);
 
-              // The current frame will be swapped out for a JIT frame, so pop it off the interpreter stack.
-              ctx.popFrame();
-
-              // Remember the return kind since we'll need it later.
-              var returnKind = mi.returnKind;
-
-              // Set the global OSR frame to the current frame.
-              O = frame;
-
-              // Set the current frame before doing the OSR in case an exception is thrown.
-              frame = ctx.current();
-
-              // Perform OSR, the callee reads the frame stored in |O| and updates its own state.
-              returnValue = O.methodInfo.fn();
-              if (ctx.U) {
-                return;
-              }
-
-              // Usual code to return from the interpreter or push the return value.
-              if (Frame.isMarker(frame)) {
-                return returnValue;
-              }
-              mi = frame.methodInfo;
-              ci = mi.classInfo;
-              rp = ci.constantPool.resolved;
-              stack = frame.stack;
-              lastPC = -1;
-
-              if (returnKind !== Kind.Void) {
-                if (isTwoSlot(returnKind)) {
-                  stack.push2(returnValue);
-                } else {
-                  stack.push(returnValue);
-                }
-              }
-            }
-          }
-        }
-
-        lastPC = frame.opPC = frame.pc;
-        var op: Bytecodes = frame.read8();
-
+        bytecodeCount ++;
+        frame.methodInfo.stats.bytecodeCount ++;
         switch (op) {
           case Bytecodes.NOP:
             break;
@@ -339,15 +190,13 @@ module J2ME {
             stack.push(frame.read16Signed());
             break;
           case Bytecodes.LDC:
+            stack.push(frame.methodInfo.classInfo.constantPool.resolve(frame.read8(), TAGS.CONSTANT_Any, false));
+            break;
           case Bytecodes.LDC_W:
-            index = (op === Bytecodes.LDC) ? frame.read8() : frame.read16();
-            constant = ci.constantPool.resolve(index, TAGS.CONSTANT_Any, false);
-            stack.push(constant);
+            stack.push(frame.methodInfo.classInfo.constantPool.resolve(frame.read16(), TAGS.CONSTANT_Any, false));
             break;
           case Bytecodes.LDC2_W:
-            index = frame.read16();
-            constant = ci.constantPool.resolve(index, TAGS.CONSTANT_Any, false);
-            stack.push2(constant);
+            stack.push2(frame.methodInfo.classInfo.constantPool.resolve(frame.read16(), TAGS.CONSTANT_Any, false));
             break;
           case Bytecodes.ILOAD:
             stack.push(frame.local[frame.read8()]);
@@ -403,17 +252,37 @@ module J2ME {
           case Bytecodes.BALOAD:
           case Bytecodes.CALOAD:
           case Bytecodes.SALOAD:
-            index = stack.pop();
-            array = stack.pop();
-            checkArrayBounds(array, index);
-            stack.push(array[index]);
+            a = stack.pop();
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            if (!checkArrayBounds(c, a)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            stack.push(c[a]);
             break;
           case Bytecodes.LALOAD:
           case Bytecodes.DALOAD:
-            index = stack.pop();
-            array = stack.pop();
-            checkArrayBounds(array, index);
-            stack.push2(array[index]);
+            a = stack.pop();
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            if (!checkArrayBounds(c, a)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            stack.push2(c[a]);
             break;
           case Bytecodes.ISTORE:
           case Bytecodes.FSTORE:
@@ -465,27 +334,61 @@ module J2ME {
           case Bytecodes.BASTORE:
           case Bytecodes.CASTORE:
           case Bytecodes.SASTORE:
-            value = stack.pop();
-            index = stack.pop();
-            array = stack.pop();
-            checkArrayBounds(array, index);
-            array[index] = value;
+            b = stack.pop();
+            a = stack.pop();
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            if (!checkArrayBounds(c, a)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            c[a] = b;
             break;
           case Bytecodes.LASTORE:
           case Bytecodes.DASTORE:
-            value = stack.pop2();
-            index = stack.pop();
-            array = stack.pop();
-            checkArrayBounds(array, index);
-            array[index] = value;
+            b = stack.pop2();
+            a = stack.pop();
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            if (!checkArrayBounds(c, a)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            c[a] = b;
             break;
           case Bytecodes.AASTORE:
-            value = stack.pop();
-            index = stack.pop();
-            array = stack.pop();
-            checkArrayBounds(array, index);
-            checkArrayStore(array, value);
-            array[index] = value;
+            b = stack.pop();
+            a = stack.pop();
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            if (!checkArrayBounds(c, a)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            if (!checkArrayStore(c, b)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            c[a] = b;
             break;
           case Bytecodes.POP:
             stack.pop();
@@ -534,7 +437,7 @@ module J2ME {
             a = stack.pop();
             b = stack.pop();
             c = stack.pop();
-            var d = stack.pop();
+            d = stack.pop();
             stack.push(b);
             stack.push(a);
             stack.push(d);
@@ -549,14 +452,14 @@ module J2ME {
             stack.push(b);
             break;
           case Bytecodes.IINC:
-            index = frame.read8();
-            value = frame.read8Signed();
-            frame.local[index] += value | 0;
+            a = frame.read8();
+            b = frame.read8Signed();
+            frame.local[a] += b | 0;
             break;
           case Bytecodes.IINC_GOTO:
-            index = frame.read8();
-            value = frame.read8Signed();
-            frame.local[index] += frame.local[index];
+            a = frame.read8();
+            b = frame.read8Signed();
+            frame.local[a] += frame.local[a];
             frame.pc ++;
             frame.pc = frame.readTargetPC();
             break;
@@ -599,13 +502,21 @@ module J2ME {
           case Bytecodes.IDIV:
             b = stack.pop();
             a = stack.pop();
-            checkDivideByZero(b);
+            if (!checkDivideByZero(b)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
             stack.push((a === Constants.INT_MIN && b === -1) ? a : ((a / b) | 0));
             break;
           case Bytecodes.LDIV:
             b = stack.pop2();
             a = stack.pop2();
-            checkDivideByZeroLong(b);
+            if (!checkDivideByZeroLong(b)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
             stack.push2(a.div(b));
             break;
           case Bytecodes.FDIV:
@@ -621,13 +532,21 @@ module J2ME {
           case Bytecodes.IREM:
             b = stack.pop();
             a = stack.pop();
-            checkDivideByZero(b);
+            if (!checkDivideByZero(b)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
             stack.push(a % b);
             break;
           case Bytecodes.LREM:
             b = stack.pop2();
             a = stack.pop2();
-            checkDivideByZeroLong(b);
+            if (!checkDivideByZeroLong(b)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
             stack.push2(a.modulo(b));
             break;
           case Bytecodes.FREM:
@@ -714,12 +633,10 @@ module J2ME {
           case Bytecodes.FCMPL:
             b = stack.pop();
             a = stack.pop();
-            if (isNaN(a) || isNaN(b)) {
+            if (isNaN(a) || isNaN(b) || a < b) {
               stack.push(-1);
             } else if (a > b) {
               stack.push(1);
-            } else if (a < b) {
-              stack.push(-1);
             } else {
               stack.push(0);
             }
@@ -727,9 +644,7 @@ module J2ME {
           case Bytecodes.FCMPG:
             b = stack.pop();
             a = stack.pop();
-            if (isNaN(a) || isNaN(b)) {
-              stack.push(1);
-            } else if (a > b) {
+            if (isNaN(a) || isNaN(b) || a > b) {
               stack.push(1);
             } else if (a < b) {
               stack.push(-1);
@@ -740,12 +655,10 @@ module J2ME {
           case Bytecodes.DCMPL:
             b = stack.pop2();
             a = stack.pop2();
-            if (isNaN(a) || isNaN(b)) {
+            if (isNaN(a) || isNaN(b) || a < b) {
               stack.push(-1);
             } else if (a > b) {
               stack.push(1);
-            } else if (a < b) {
-              stack.push(-1);
             } else {
               stack.push(0);
             }
@@ -753,9 +666,7 @@ module J2ME {
           case Bytecodes.DCMPG:
             b = stack.pop2();
             a = stack.pop2();
-            if (isNaN(a) || isNaN(b)) {
-              stack.push(1);
-            } else if (a > b) {
+            if (isNaN(a) || isNaN(b) || a > b) {
               stack.push(1);
             } else if (a < b) {
               stack.push(-1);
@@ -764,99 +675,99 @@ module J2ME {
             }
             break;
           case Bytecodes.IFEQ:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() === 0) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IFNE:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() !== 0) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IFLT:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() < 0) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IFGE:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() >= 0) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IFGT:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() > 0) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IFLE:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() <= 0) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IF_ICMPEQ:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() === stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IF_ICMPNE:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() !== stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IF_ICMPLT:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() > stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IF_ICMPGE:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() <= stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IF_ICMPGT:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() < stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IF_ICMPLE:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() >= stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IF_ACMPEQ:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() === stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IF_ACMPNE:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() !== stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IFNULL:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (!stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.IFNONNULL:
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.GOTO:
@@ -866,14 +777,14 @@ module J2ME {
             frame.pc = frame.read32Signed() - 1;
             break;
           case Bytecodes.JSR:
-            pc = frame.read16();
+            a = frame.read16();
             stack.push(frame.pc);
-            frame.pc = pc;
+            frame.pc = a;
             break;
           case Bytecodes.JSR_W:
-            pc = frame.read32();
+            a = frame.read32();
             stack.push(frame.pc);
-            frame.pc = pc;
+            frame.pc = a;
             break;
           case Bytecodes.RET:
             frame.pc = frame.local[frame.read8()];
@@ -929,386 +840,543 @@ module J2ME {
             frame.pc = frame.lookupSwitch();
             break;
           case Bytecodes.NEWARRAY:
-            type = frame.read8();
-            size = stack.pop();
-            stack.push(newArray(PrimitiveClassInfo["????ZCFDBSIJ"[type]].klass, size));
+            a = frame.read8();
+            b = stack.pop();
+            if (b < 0) {
+              ctx.pushExceptionThrow(NegativeArraySizeExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            stack.push(newArray(PrimitiveClassInfo["????ZCFDBSIJ"[a]].klass, b));
             break;
           case Bytecodes.ANEWARRAY:
-            index = frame.read16();
-            classInfo = resolveClass(index, mi.classInfo);
-            size = stack.pop();
-            stack.push(newArray(classInfo.klass, size));
+            a = frame.read16();
+            ci = resolveClass(a, frame.methodInfo.classInfo);
+            b = stack.pop();
+            if (b < 0) {
+              ctx.pushExceptionThrow(NegativeArraySizeExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            stack.push(newArray(ci.klass, b));
             break;
           case Bytecodes.MULTIANEWARRAY:
-            index = frame.read16();
-            classInfo = resolveClass(index, mi.classInfo);
-            var dimensions = frame.read8();
-            var lengths = new Array(dimensions);
-            for (var i = 0; i < dimensions; i++)
-              lengths[i] = stack.pop();
-            stack.push(J2ME.newMultiArray(classInfo.klass, lengths.reverse()));
+            a = frame.read16();
+            ci = resolveClass(a, frame.methodInfo.classInfo);
+            d = frame.read8();
+            if (d < 0) {
+              ctx.pushExceptionThrow(NegativeArraySizeExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            b = new Array(d);
+            c = b.length;
+            for (; c > 0; c--) {
+              b[c-1] = stack.pop();
+              if (b[c-1] < 0) {
+                ctx.pushExceptionThrow(NegativeArraySizeExceptionStr);
+                frame = ctx.current();
+                stack = frame.stack;
+                break;
+              }
+            }
+            if (c !== 0) {
+              continue;
+            }
+            stack.push(J2ME.newMultiArray(ci.klass, b));
             break;
           case Bytecodes.ARRAYLENGTH:
-            array = stack.pop();
-            stack.push(array.length);
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            stack.push(c.length);
             break;
           case Bytecodes.ARRAYLENGTH_IF_ICMPGE:
-            array = stack.pop();
-            stack.push(array.length);
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            stack.push(c.length);
             frame.pc ++;
-            pc = frame.readTargetPC();
+            a = frame.readTargetPC();
             if (stack.pop() <= stack.pop()) {
-              frame.pc = pc;
+              frame.pc = a;
             }
             break;
           case Bytecodes.GETFIELD:
-            index = frame.read16();
-            fieldInfo = mi.classInfo.constantPool.resolveField(index, false);
-            object = stack.pop();
-            stack.pushKind(fieldInfo.kind, fieldInfo.get(object));
+            a = frame.read16();
+            fi = frame.methodInfo.classInfo.constantPool.resolveField(a, false);
+            if (!fi) {
+              ctx.pushExceptionThrow(RuntimeExceptionStr, "Field not found on class " + frame.methodInfo.classInfo.getClassNameSlow() + " at index " + a);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            stack.pushKind(fi.kind, fi.get(c));
             frame.patch(3, Bytecodes.GETFIELD, Bytecodes.RESOLVED_GETFIELD);
             break;
           case Bytecodes.RESOLVED_GETFIELD:
-            fieldInfo = <FieldInfo><any>rp[frame.read16()];
-            object = stack.pop();
-            stack.pushKind(fieldInfo.kind, fieldInfo.get(object));
+            fi = <FieldInfo><any>frame.methodInfo.classInfo.constantPool.resolved[frame.read16()];
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            stack.pushKind(fi.kind, fi.get(c));
             break;
           case Bytecodes.PUTFIELD:
-            index = frame.read16();
-            fieldInfo = mi.classInfo.constantPool.resolveField(index, false);
-            value = stack.popKind(fieldInfo.kind);
-            object = stack.pop();
-            fieldInfo.set(object, value);
+            a = frame.read16();
+            fi = frame.methodInfo.classInfo.constantPool.resolveField(a, false);
+            if (!fi) {
+              ctx.pushExceptionThrow(RuntimeExceptionStr, "Field not found on class " + frame.methodInfo.classInfo.getClassNameSlow() + " at index " + a);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            b = stack.popKind(fi.kind);
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            fi.set(c, b);
             frame.patch(3, Bytecodes.PUTFIELD, Bytecodes.RESOLVED_PUTFIELD);
             break;
           case Bytecodes.RESOLVED_PUTFIELD:
-            fieldInfo = <FieldInfo><any>rp[frame.read16()];
-            value = stack.popKind(fieldInfo.kind);
-            object = stack.pop();
-            fieldInfo.set(object, value);
+            fi = <FieldInfo><any>frame.methodInfo.classInfo.constantPool.resolved[frame.read16()];
+            b = stack.popKind(fi.kind);
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            fi.set(c, b);
             break;
           case Bytecodes.GETSTATIC:
-            index = frame.read16();
-            fieldInfo = mi.classInfo.constantPool.resolveField(index, true);
-            classInitAndUnwindCheck(fieldInfo.classInfo, frame.pc - 3);
-            if (ctx.U) {
-              return;
+            a = frame.read16();
+            fi = frame.methodInfo.classInfo.constantPool.resolveField(a, true);
+            if (!fi) {
+              ctx.pushExceptionThrow(RuntimeExceptionStr, "Field not found on class " + frame.methodInfo.classInfo.getClassNameSlow() + " at index " + a);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
             }
-            value = fieldInfo.getStatic();
-            stack.pushKind(fieldInfo.kind, value);
+            if (!ctx.runtime.maybePushClassInit(fi.classInfo)) {
+              frame.pc = frame.opPC;
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            b = fi.getStatic();
+            stack.pushKind(fi.kind, b);
             break;
           case Bytecodes.PUTSTATIC:
-            index = frame.read16();
-            fieldInfo = mi.classInfo.constantPool.resolveField(index, true);
-            classInitAndUnwindCheck(fieldInfo.classInfo, frame.pc - 3);
-            if (ctx.U) {
-              return;
+            a = frame.read16();
+            fi = frame.methodInfo.classInfo.constantPool.resolveField(a, true);
+            if (!fi) {
+              ctx.pushExceptionThrow(RuntimeExceptionStr, "Field not found on class " + frame.methodInfo.classInfo.getClassNameSlow() + " at index " + a);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
             }
-            fieldInfo.setStatic(stack.popKind(fieldInfo.kind));
+            if (!ctx.runtime.maybePushClassInit(fi.classInfo)) {
+              frame.pc = frame.opPC;
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            fi.setStatic(stack.popKind(fi.kind));
             break;
           case Bytecodes.NEW:
-            index = frame.read16();
-            classInfo = resolveClass(index, mi.classInfo);
-            classInitAndUnwindCheck(classInfo, frame.pc - 3);
-            if (ctx.U) {
-              return;
+            a = frame.read16();
+            ci = resolveClass(a, frame.methodInfo.classInfo);
+            if (!ctx.runtime.maybePushClassInit(ci)) {
+              frame.pc = frame.opPC;
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
             }
-            stack.push(newObject(classInfo.klass));
+            stack.push(newObject(ci.klass));
             break;
           case Bytecodes.CHECKCAST:
-            index = frame.read16();
-            classInfo = resolveClass(index, mi.classInfo);
-            object = stack[stack.length - 1];
-            if (object && !isAssignableTo(object.klass, classInfo.klass)) {
-              throw $.newClassCastException(
-                  object.klass.classInfo.getClassNameSlow() + " is not assignable to " +
-                  classInfo.getClassNameSlow());
+            a = frame.read16();
+            ci = resolveClass(a, frame.methodInfo.classInfo);
+            c = stack[stack.length - 1];
+            if (c && !isAssignableTo(c.klass, ci.klass)) {
+              ctx.pushExceptionThrow(ClassCastExceptionStr,
+                  c.klass.classInfo.getClassNameSlow() + " is not assignable to " +
+                  ci.getClassNameSlow());
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
             }
             break;
           case Bytecodes.INSTANCEOF:
-            index = frame.read16();
-            classInfo = resolveClass(index, mi.classInfo);
-            object = stack.pop();
-            var result = !object ? false : isAssignableTo(object.klass, classInfo.klass);
-            stack.push(result ? 1 : 0);
+            a = frame.read16();
+            ci = resolveClass(a, frame.methodInfo.classInfo);
+            c = stack.pop();
+            stack.push(c && isAssignableTo(c.klass, ci.klass) ? 1 : 0);
             break;
           case Bytecodes.ATHROW:
-            object = stack.pop();
-            if (!object) {
-              throw $.newNullPointerException();
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
             }
-            throw object;
-            break;
+            tryCatch(c);
+            if (VMState.Running !== ctx.U) {
+              return;
+            }
+            frame = ctx.current();
+            stack = frame.stack;
+            continue;
           case Bytecodes.MONITORENTER:
-            object = stack.pop();
-            ctx.monitorEnter(object);
-            if (ctx.U === VMState.Pausing || ctx.U === VMState.Stopping) {
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            ctx.monitorEnter(c);
+            if (VMState.Running !== ctx.U) {
               return;
             }
             break;
           case Bytecodes.MONITOREXIT:
-            object = stack.pop();
-            ctx.monitorExit(object);
+            c = stack.pop();
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            if (!ctx.monitorExit(c)) {
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
             break;
           case Bytecodes.WIDE:
             frame.wide();
             break;
-          case Bytecodes.RESOLVED_INVOKEVIRTUAL:
-            index = frame.read16();
-            var calleeMethodInfo = <MethodInfo><any>rp[index];
-            var object = frame.peekInvokeObject(calleeMethodInfo);
 
-            calleeMethod = object[calleeMethodInfo.virtualName];
-            var calleeTargetMethodInfo: MethodInfo = calleeMethod.methodInfo;
-
-            if (calleeTargetMethodInfo &&
-                !calleeTargetMethodInfo.isSynchronized &&
-                !calleeTargetMethodInfo.isNative &&
-                calleeTargetMethodInfo.state !== MethodState.Compiled) {
-              var calleeFrame = Frame.create(calleeTargetMethodInfo, []);
-              ArrayUtilities.popManyInto(stack, calleeTargetMethodInfo.consumeArgumentSlots, calleeFrame.local);
-              ctx.pushFrame(calleeFrame);
-              frame = calleeFrame;
-              mi = frame.methodInfo;
-              mi.stats.interpreterCallCount ++;
-              ci = mi.classInfo;
-              rp = ci.constantPool.resolved;
-              stack = frame.stack;
-              lastPC = -1;
-              continue;
-            }
-
-            // Call directy.
-            var returnValue;
-            var argumentSlots = calleeMethodInfo.argumentSlots;
-            switch (argumentSlots) {
-              case 0:
-                returnValue = calleeMethod.call(object);
-                break;
-              case 1:
-                a = stack.pop();
-                returnValue = calleeMethod.call(object, a);
-                break;
-              case 2:
-                b = stack.pop();
-                a = stack.pop();
-                returnValue = calleeMethod.call(object, a, b);
-                break;
-              case 3:
-                c = stack.pop();
-                b = stack.pop();
-                a = stack.pop();
-                returnValue = calleeMethod.call(object, a, b, c);
-                break;
-              default:
-                Debug.assertUnreachable("Unexpected number of arguments");
-                break;
-            }
-            stack.pop();
-            if (!release) {
-              checkReturnValue(calleeMethodInfo, returnValue);
-            }
+          case Bytecodes.INVOKEJS:
+            frame.local[0].apply(frame.local[1], frame.local[2]);
             if (ctx.U) {
               return;
             }
-            if (calleeMethodInfo.returnKind !== Kind.Void) {
-              if (isTwoSlot(calleeMethodInfo.returnKind)) {
-                stack.push2(returnValue);
-              } else {
-                stack.push(returnValue);
-              }
-            }
-            break;
-          case Bytecodes.INVOKEVIRTUAL:
-          case Bytecodes.INVOKESPECIAL:
-          case Bytecodes.INVOKESTATIC:
-          case Bytecodes.INVOKEINTERFACE:
-            index = frame.read16();
-            if (op === Bytecodes.INVOKEINTERFACE) {
-              frame.read16(); // Args Number & Zero
-            }
-            var isStatic = (op === Bytecodes.INVOKESTATIC);
+            // NB: The function we called may have added frames or set
+            // ctx.U. We currently don't expect it to have removed frames.
+            // If that changes in the future, we'll need to check for
+            // frame being null.
+            frame = ctx.current();
+            stack = frame.stack;
+            continue;
 
-            // Resolve method and do the class init check if necessary.
-            var calleeMethodInfo = mi.classInfo.constantPool.resolveMethod(index, isStatic);
+          case Bytecodes.RESOLVED_INVOKEVIRTUAL:
+            a = frame.read16();
+            b = <MethodInfo><any>frame.methodInfo.classInfo.constantPool.resolved[a];
 
-            // Fast path for some of the most common interpreter call targets.
-            if (calleeMethodInfo.classInfo.getClassNameSlow() === "java/lang/Object" &&
-                calleeMethodInfo.name === "<init>") {
-              stack.pop();
+            c = frame.peekInvokeObject(b);
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
               continue;
             }
+            b = c.klass.classInfo.vTable[b.vTableIndex];
 
-            if (isStatic) {
-              classInitAndUnwindCheck(calleeMethodInfo.classInfo, lastPC);
+            frame = Frame.create(b, []);
+            if (b.isNative || b.state === MethodState.Compiled) {
+              frame.local.push(c[b.virtualName]);
+              frame.local.push(c);
+              d = [];
+              ArrayUtilities.popArgsInto(stack, b, d);
+              frame.local.push(d);
+            } else {
+              ArrayUtilities.popArgSlotsInto(stack, b, frame.local);
+            }
+            stack = frame.stack;
+            ctx.pushFrame(frame);
+            if (b.isSynchronized) {
+              if (!frame.lockObject) {
+                frame.lockObject = c;
+              }
+              ctx.monitorEnter(frame.lockObject);
               if (ctx.U) {
                 return;
               }
             }
+            continue;
 
-            // Figure out the target method.
-            var calleeTargetMethodInfo: MethodInfo = calleeMethodInfo;
-            object = null;
-            var calleeMethod: any;
-            if (!isStatic) {
-              object = frame.peekInvokeObject(calleeMethodInfo);
-              switch (op) {
-                case Bytecodes.INVOKEVIRTUAL:
-                  if (!calleeTargetMethodInfo.hasTwoSlotArguments &&
-                      calleeTargetMethodInfo.argumentSlots < 4) {
-                    frame.patch(3, Bytecodes.INVOKEVIRTUAL, Bytecodes.RESOLVED_INVOKEVIRTUAL);
-                  }
-                case Bytecodes.INVOKEINTERFACE:
-                  var name = op === Bytecodes.INVOKEVIRTUAL ? calleeMethodInfo.virtualName : calleeMethodInfo.mangledName;
-                  calleeMethod = object[name];
-                  calleeTargetMethodInfo = calleeMethod.methodInfo;
-                  break;
-                case Bytecodes.INVOKESPECIAL:
-                  checkNull(object);
-                  calleeMethod = getLinkedMethod(calleeMethodInfo);
-                  break;
-              }
-            } else {
-              calleeMethod = getLinkedMethod(calleeMethodInfo);
-            }
-            // Call method directly in the interpreter if we can.
-            if (calleeTargetMethodInfo && !calleeTargetMethodInfo.isNative && calleeTargetMethodInfo.state !== MethodState.Compiled) {
-              var calleeFrame = Frame.create(calleeTargetMethodInfo, []);
-              ArrayUtilities.popManyInto(stack, calleeTargetMethodInfo.consumeArgumentSlots, calleeFrame.local);
-              ctx.pushFrame(calleeFrame);
-              frame = calleeFrame;
-              mi = frame.methodInfo;
-              mi.stats.interpreterCallCount ++;
-              ci = mi.classInfo;
-              rp = ci.constantPool.resolved;
+          case Bytecodes.INVOKEVIRTUAL:
+            a = frame.read16();
+            b = frame.methodInfo.classInfo.constantPool.resolveMethod(a, false);
+            if (!b) {
+              ctx.pushExceptionThrow(RuntimeExceptionStr, "Method not found on class " + frame.methodInfo.classInfo.getClassNameSlow() + " at index " + a);
+              frame = ctx.current();
               stack = frame.stack;
-              lastPC = -1;
-              if (calleeTargetMethodInfo.isSynchronized) {
-                if (!calleeFrame.lockObject) {
-                  frame.lockObject = calleeTargetMethodInfo.isStatic
-                    ? calleeTargetMethodInfo.classInfo.getClassObject()
-                    : frame.local[0];
-                }
-                ctx.monitorEnter(calleeFrame.lockObject);
-                if (ctx.U === VMState.Pausing || ctx.U === VMState.Stopping) {
-                  return;
-                }
-              }
               continue;
             }
 
-            // Call directy.
-            var returnValue;
-            var argumentSlots = calleeMethodInfo.hasTwoSlotArguments ? -1 : calleeMethodInfo.argumentSlots;
-            switch (argumentSlots) {
-              case 0:
-                returnValue = calleeMethod.call(object);
-                break;
-              case 1:
-                a = stack.pop();
-                returnValue = calleeMethod.call(object, a);
-                break;
-              case 2:
-                b = stack.pop();
-                a = stack.pop();
-                returnValue = calleeMethod.call(object, a, b);
-                break;
-              case 3:
-                c = stack.pop();
-                b = stack.pop();
-                a = stack.pop();
-                returnValue = calleeMethod.call(object, a, b, c);
-                break;
-              default:
-                if (calleeMethodInfo.hasTwoSlotArguments) {
-                  frame.popArgumentsInto(calleeMethodInfo, argArray);
-                } else {
-                  popManyInto(stack, calleeMethodInfo.argumentSlots, argArray);
-                }
-                var returnValue = calleeMethod.apply(object, argArray);
+            c = frame.peekInvokeObject(b);
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
             }
-
-            if (!isStatic) {
-              stack.pop();
+            // TODO: Remove this
+            var oldB = b;
+            b = c.klass.classInfo.vTable[b.vTableIndex];
+            if (!b) {
+              console.log("FAILURE");
+              console.log(oldB.implKey);
+              console.log(c.klass.classInfo.getClassNameSlow());
             }
+            frame.patch(3, Bytecodes.INVOKEVIRTUAL, Bytecodes.RESOLVED_INVOKEVIRTUAL);
 
-            if (!release) {
-              checkReturnValue(calleeMethodInfo, returnValue);
+            frame = Frame.create(b, []);
+            if (b.isNative) {
+              frame.local.push(c[b.virtualName]);
+              frame.local.push(c);
+              d = [];
+              ArrayUtilities.popArgsInto(stack, b, d);
+              frame.local.push(d);
+            } else {
+              ArrayUtilities.popArgSlotsInto(stack, b, frame.local);
             }
-
-            if (ctx.U) {
-              return;
-            }
-
-            if (calleeMethodInfo.returnKind !== Kind.Void) {
-              if (isTwoSlot(calleeMethodInfo.returnKind)) {
-                stack.push2(returnValue);
-              } else {
-                stack.push(returnValue);
+            stack = frame.stack;
+            ctx.pushFrame(frame);
+            if (b.isSynchronized) {
+              if (!frame.lockObject) {
+                frame.lockObject = c;
+              }
+              ctx.monitorEnter(frame.lockObject);
+              if (ctx.U) {
+                return;
               }
             }
-            break;
+            continue;
+
+          case Bytecodes.INVOKESPECIAL:
+            a = frame.read16();
+            b = frame.methodInfo.classInfo.constantPool.resolveMethod(a, false);
+            if (!b) {
+              ctx.pushExceptionThrow(RuntimeExceptionStr, "Method not found on class " + frame.methodInfo.classInfo.getClassNameSlow() + " at index " + a);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+
+            c = frame.peekInvokeObject(b);
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+
+            frame = Frame.create(b, []);
+            if (b.isNative) {
+              frame.local.push(getLinkedMethod(b));
+              frame.local.push(c);
+              d = [];
+              ArrayUtilities.popArgsInto(stack, b, d);
+              frame.local.push(d);
+            } else if (b.state === MethodState.Compiled) {
+              // TODO
+            } else {
+              ArrayUtilities.popArgSlotsInto(stack, b, frame.local);
+            }
+            stack = frame.stack;
+            ctx.pushFrame(frame);
+            if (b.isSynchronized) {
+              if (!frame.lockObject) {
+                frame.lockObject = c;
+              }
+              ctx.monitorEnter(frame.lockObject);
+              if (ctx.U) {
+                return;
+              }
+            }
+            continue;
+
+          case Bytecodes.INVOKESTATIC:
+          //console.log("INVOKESTATIC");
+            a = frame.read16();
+            b = frame.methodInfo.classInfo.constantPool.resolveMethod(a, true);
+            if (!b) {
+              ctx.pushExceptionThrow(RuntimeExceptionStr, "Method not found on class " + frame.methodInfo.classInfo.getClassNameSlow() + " at index " + a);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+
+            if (!ctx.runtime.maybePushClassInit(b.classInfo)) {
+              frame.pc = frame.opPC;
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            frame = Frame.create(b, []);
+            if (b.isNative) {
+            //console.log("\tnative!");
+              frame.local.push(getLinkedMethod(b));
+              frame.local.push(null);
+              d = [];
+              ArrayUtilities.popArgsInto(stack, b, d);
+              frame.local.push(d);
+            } else if (b.state === MethodState.Compiled) {
+              // TODO
+            } else {
+            //console.log("\tpopping args: " + stack.length);
+              ArrayUtilities.popArgSlotsInto(stack, b, frame.local);
+              //console.log("\tpopped args: " + stack.length);
+            }
+            stack = frame.stack;
+
+            ctx.pushFrame(frame);
+            if (b.isSynchronized) {
+              if (!frame.lockObject) {
+                frame.lockObject = b.classInfo.getClassObject();
+              }
+              ctx.monitorEnter(frame.lockObject);
+              if (VMState.Running !== ctx.U) {
+                return;
+              }
+            }
+            continue;
+
+          case Bytecodes.INVOKEINTERFACE:
+            a = frame.read16();
+            frame.read16(); // Args Number & Zero
+            b = frame.methodInfo.classInfo.constantPool.resolveMethod(a, false);
+            if (!b) {
+              ctx.pushExceptionThrow(RuntimeExceptionStr, "Method not found on class " + frame.methodInfo.classInfo.getClassNameSlow() + " at index " + a);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+
+            c = frame.peekInvokeObject(b);
+            if (!c) {
+              ctx.pushExceptionThrow(NullPointerExceptionStr);
+              frame = ctx.current();
+              stack = frame.stack;
+              continue;
+            }
+            b = c.klass.classInfo.getMethodByName(b.utf8Name, b.utf8Signature);
+
+            frame = Frame.create(b, []);
+            if (b.isNative) {
+              frame.local.push(c[b.virtualName]);
+              frame.local.push(c);
+              d = [];
+              ArrayUtilities.popArgsInto(stack, b, d);
+              frame.local.push(d);
+            } else if (b.state === MethodState.Compiled) {
+              // TODO
+            } else {
+              ArrayUtilities.popArgSlotsInto(stack, b, frame.local);
+            }
+            stack = frame.stack;
+            ctx.pushFrame(frame);
+            if (b.isSynchronized) {
+              if (!frame.lockObject) {
+                frame.lockObject = c;
+              }
+              ctx.monitorEnter(frame.lockObject);
+              if (ctx.U) {
+                return;
+              }
+            }
+            continue;
 
           case Bytecodes.LRETURN:
           case Bytecodes.DRETURN:
-            returnValue = stack.pop();
+            a = stack.pop2();
+            b = ctx.popFrame();
+            if (b.lockObject) {
+              if (!ctx.monitorExit(b.lockObject)) {
+                frame = ctx.current();
+                stack = frame.stack;
+                continue;
+              }
+            }
+            b.free();
+            frame = ctx.current();
+            assert(frame, "Returned a wide value to nowhere");
+            stack = frame.stack;
+            stack.push2(a);
+            break;
           case Bytecodes.IRETURN:
           case Bytecodes.FRETURN:
           case Bytecodes.ARETURN:
-            returnValue = stack.pop();
-          case Bytecodes.RETURN:
-            var callee = ctx.popFrame();
-            if (callee.lockObject) {
-              ctx.monitorExit(callee.lockObject);
-            }
-            callee.free();
-            frame = ctx.current();
-            if (Frame.isMarker(frame)) { // Marker or Start Frame
-              if (op === Bytecodes.RETURN) {
-                return undefined;
+          //console.log("returning a narrow value");
+            a = stack.pop();
+            //console.log("value=" + a);
+            b = ctx.popFrame();
+            if (b.lockObject) {
+              if (!ctx.monitorExit(b.lockObject)) {
+                frame = ctx.current();
+                stack = frame.stack;
+                continue;
               }
-              return returnValue;
             }
-            mi = frame.methodInfo;
-            ci = mi.classInfo;
-            rp = ci.constantPool.resolved;
+            b.free();
+            frame = ctx.current();
+            assert(frame, "Returned a narrow value to nowhere");
             stack = frame.stack;
-            lastPC = -1;
-            if (op === Bytecodes.RETURN) {
-              // Nop.
-            } else if (op === Bytecodes.LRETURN || op === Bytecodes.DRETURN) {
-              stack.push2(returnValue);
-            } else {
-              stack.push(returnValue);
+            stack.push(a);
+            break;
+          case Bytecodes.RETURN:
+            b = ctx.popFrame();
+            if (b.lockObject) {
+              if (!ctx.monitorExit(b.lockObject)) {
+                frame = ctx.current();
+                stack = frame.stack;
+                continue;
+              }
             }
+            b.free();
+            frame = ctx.current();
+            if (!frame) {
+              ctx.stop();
+              return;
+            }
+            stack = frame.stack;
             break;
           default:
-            var opName = Bytecodes[op];
-            throw new Error("Opcode " + opName + " [" + op + "] not supported.");
+            throw new Error("Opcode " + Bytecodes[op] + " [" + op + "] not supported.");
         }
-      } catch (e) {
-        // This can happen if we OSR into a frame that is right after a marker
-        // frame. If an exception occurs in this frame, then we end up here and
-        // the current frame is a marker frame, so we'll need to rethrow.
-        if (Frame.isMarker(ctx.current())) {
-          throw e;
-        }
-        e = translateException(e);
-        if (!e.klass) {
-          // A non-java exception was thrown. Rethrow so it is not handled by tryCatch.
-          throw e;
-        }
-        tryCatch(e);
-        frame = ctx.current();
-        assert (!Frame.isMarker(frame), "Unexpected marker frame in interpret");
-        mi = frame.methodInfo;
-        ci = mi.classInfo;
-        rp = ci.constantPool.resolved;
-        stack = frame.stack;
-        lastPC = -1;
-        continue;
-      }
-    }
+    } while(!J2ME.Scheduler.shouldPreempt());
   }
 
   export class VM {

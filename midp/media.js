@@ -346,13 +346,10 @@ function ImagePlayer(playerContainer) {
 }
 
 ImagePlayer.prototype.realize = function() {
-    var ctx = $.ctx;
-
     var p = new Promise((function(resolve, reject) {
         this.image.onload = resolve.bind(null, 1);
         this.image.onerror = function() {
-            ctx.setAsCurrentContext();
-            reject($.newMediaException("Failed to load image"));
+            reject({ name: J2ME.MediaExceptionStr, msg: "Failed to load image" });
         };
 
         if (this.url.startsWith("file")) {
@@ -429,8 +426,6 @@ function VideoPlayer(playerContainer) {
 }
 
 VideoPlayer.prototype.realize = function() {
-    var ctx = $.ctx;
-
     var p = new Promise((function(resolve, reject) {
         this.video.addEventListener("canplay", (function onCanPlay() {
             this.video.removeEventListener("canplay", onCanPlay);
@@ -438,8 +433,7 @@ VideoPlayer.prototype.realize = function() {
         }).bind(this));
 
         this.video.onerror = function() {
-            ctx.setAsCurrentContext();
-            reject($.newMediaException("Failed to load video"));
+            reject({ name: J2ME.MediaExceptionStr, msg: "Failed to load video" });
         };
 
         if (this.playerContainer.url.startsWith("file")) {
@@ -551,11 +545,10 @@ ImageRecorder.prototype.realize = function() {
 ImageRecorder.prototype.recipient = function(message) {
     switch (message.type) {
         case "initerror":
-            this.ctx.setAsCurrentContext();
             if (message.name == "PermissionDeniedError") {
-                this.realizeRejector($.newSecurityException("Not permitted to init camera"));
+                this.realizeRejector(J2ME.SecurityExceptionStr, "Not permitted to init camera");
             } else {
-                this.realizeRejector($.newMediaException("Failed to init camera, no camera?"));
+                this.realizeRejector(J2ME.MediaExceptionStr, "Failed to init camera, no camera?");
             }
             this.realizeResolver = null;
             this.realizeRejector = null;
@@ -1264,7 +1257,8 @@ Native["com/sun/mmedia/DirectRecord.nClose.(I)I"] = function(handle) {
         // We need to check if |audioRecorder| is still available, because |nClose|
         // might be called twice in DirectRecord.java, and only IOException is
         // handled in DirectRecord.java, let use IOException instead of IllegalStateException.
-        throw $.newIOException();
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr);
+        return;
     }
 
     asyncImpl("I", player.audioRecorder.close().then(function(result) {

@@ -182,20 +182,23 @@ Native["com/nokia/mid/s40/codec/DataDecoder.init.([BII)V"] = function(data, offs
 
 Native["com/nokia/mid/s40/codec/DataDecoder.getStart.(I)V"] = function(tag) {
   if (!this.decoder.getStart(tag)) {
-    throw $.newIOException("no start found " + tag);
+    $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "no start found " + tag);
+    return;
   }
 };
 
 Native["com/nokia/mid/s40/codec/DataDecoder.getEnd.(I)V"] = function(tag) {
   if (!this.decoder.getEnd(tag)) {
-    throw $.newIOException("no end found " + tag);
+    $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "no end found " + tag);
+    return;
   }
 };
 
 Native["com/nokia/mid/s40/codec/DataDecoder.getString.(I)Ljava/lang/String;"] = function(tag) {
   var str = this.decoder.getValue(tag);
   if (str === undefined) {
-    throw $.newIOException("tag (" + tag + ") invalid");
+    $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "tag (" + tag + ") invalid");
+    return;
   }
   return J2ME.newString(str);
 };
@@ -203,7 +206,8 @@ Native["com/nokia/mid/s40/codec/DataDecoder.getString.(I)Ljava/lang/String;"] = 
 Native["com/nokia/mid/s40/codec/DataDecoder.getInteger.(I)J"] = function(tag) {
   var num = this.decoder.getValue(tag);
   if (num === undefined) {
-    throw $.newIOException("tag (" + tag + ") invalid");
+    $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "tag (" + tag + ") invalid");
+    return;
   }
   return Long.fromNumber(num);
 };
@@ -211,7 +215,8 @@ Native["com/nokia/mid/s40/codec/DataDecoder.getInteger.(I)J"] = function(tag) {
 Native["com/nokia/mid/s40/codec/DataDecoder.getBoolean.()Z"] = function() {
   var val = this.decoder.getNextValue();
   if (val === undefined) {
-    throw $.newIOException();
+    $.ctx.pushExceptionThrow(J2ME.IOExceptionStr);
+    return;
   }
   return val === 1 ? 1 : 0;
 };
@@ -219,7 +224,8 @@ Native["com/nokia/mid/s40/codec/DataDecoder.getBoolean.()Z"] = function() {
 Native["com/nokia/mid/s40/codec/DataDecoder.getName.()Ljava/lang/String;"] = function() {
   var name = this.decoder.getName();
   if (name === undefined) {
-    throw $.newIOException();
+    $.ctx.pushExceptionThrow(J2ME.IOExceptionStr);
+    return;
   }
   return J2ME.newString(name);
 };
@@ -227,7 +233,8 @@ Native["com/nokia/mid/s40/codec/DataDecoder.getName.()Ljava/lang/String;"] = fun
 Native["com/nokia/mid/s40/codec/DataDecoder.getType.()I"] = function() {
   var tag = this.decoder.getTag();
   if (tag === undefined) {
-    throw $.newIOException();
+    $.ctx.pushExceptionThrow(J2ME.IOExceptionStr);
+    return;
   }
   return tag;
 };

@@ -17,7 +17,8 @@ Native["com/nokia/mid/ui/DeviceControl.startVibra.(IJ)V"] = function(freq, longD
   var duration = longDuration.toNumber();
 
   if (freq < 0 || freq > 100 || duration < 0) {
-    throw new $.newIllegalArgumentException();
+    $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr);
+    return;
   }
 
   navigator.vibrate(duration);

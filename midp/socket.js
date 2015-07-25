@@ -54,47 +54,46 @@ Socket.prototype.close = function() {
 
 Native["com/sun/midp/io/j2me/socket/Protocol.open0.([BI)V"] = function(ipBytes, port) {
     // console.log("Protocol.open0: " + this.host + ":" + port);
-    var ctx = $.ctx;
-    asyncImpl("V", new Promise((function(resolve, reject) {
-        this.socket = new Socket(this.host, port);
+    var protocol = this;
+    asyncImpl("V", new Promise(function(resolve, reject) {
+        protocol.socket = new Socket(protocol.host, port);
 
-        this.options = {};
-        this.options[SOCKET_OPT.DELAY] = 1;
-        this.options[SOCKET_OPT.LINGER] = 0;
-        this.options[SOCKET_OPT.KEEPALIVE] = 1;
-        this.options[SOCKET_OPT.RCVBUF] = 8192;
-        this.options[SOCKET_OPT.SNDBUF] = 8192;
+        protocol.options = {};
+        protocol.options[SOCKET_OPT.DELAY] = 1;
+        protocol.options[SOCKET_OPT.LINGER] = 0;
+        protocol.options[SOCKET_OPT.KEEPALIVE] = 1;
+        protocol.options[SOCKET_OPT.RCVBUF] = 8192;
+        protocol.options[SOCKET_OPT.SNDBUF] = 8192;
 
-        this.data = [];
-        this.dataLen = 0;
-        this.waitingData = null;
+        protocol.data = [];
+        protocol.dataLen = 0;
+        protocol.waitingData = null;
 
-        this.socket.onopen = function() {
-            // console.log("this.socket.onopen");
+        protocol.socket.onopen = function() {
+            // console.log("protocol.socket.onopen");
             resolve();
         }
 
-        this.socket.onerror = function(message) {
-            ctx.setAsCurrentContext();
-            // console.log("this.socket.onerror: " + message.error);
-            reject($.newIOException(message.error));
+        protocol.socket.onerror = function(message) {
+            // console.log("protocol.socket.onerror: " + message.error);
+            reject({ name: J2ME.IOExceptionStr, msg: message.error });
         }
 
-        this.socket.onclose = function() {
-            if (this.waitingData) {
-                this.waitingData();
+        protocol.socket.onclose = function() {
+            if (protocol.waitingData) {
+                protocol.waitingData();
             }
-        }.bind(this);
+        }
 
-        this.socket.ondata = (function(message) {
-            this.data.push(new Int8Array(message.data));
-            this.dataLen += message.data.byteLength;
+        protocol.socket.ondata = function(message) {
+            protocol.data.push(new Int8Array(message.data));
+            protocol.dataLen += message.data.byteLength;
 
-            if (this.waitingData) {
-                this.waitingData();
+            if (protocol.waitingData) {
+                protocol.waitingData();
             }
-        }).bind(this);
-    }).bind(this)));
+        }
+    }));
 };
 
 Native["com/sun/midp/io/j2me/socket/Protocol.available0.()I"] = function() {
@@ -151,11 +150,9 @@ Native["com/sun/midp/io/j2me/socket/Protocol.read0.([BII)I"] = function(data, of
 };
 
 Native["com/sun/midp/io/j2me/socket/Protocol.write0.([BII)I"] = function(data, offset, length) {
-    var ctx = $.ctx;
     asyncImpl("I", new Promise(function(resolve, reject) {
         if (this.socket.isClosed) {
-          ctx.setAsCurrentContext();
-          reject($.newIOException("socket is closed"));
+          reject({ name: J2ME.IOExceptionStr, msg: "socket is closed" });
           return;
         }
 
@@ -163,8 +160,8 @@ Native["com/sun/midp/io/j2me/socket/Protocol.write0.([BII)I"] = function(data, o
             this.socket.onsend = null;
             if ("error" in message) {
                 console.error(message.error);
-                ctx.setAsCurrentContext();
-                reject($.newIOException("error writing to socket"));
+                reject({ name: J2ME.IOExceptionStr, msg: "error writing to socket" });
+                return;
             } else if (message.result) {
                 resolve(length);
             } else {
@@ -181,7 +178,8 @@ Native["com/sun/midp/io/j2me/socket/Protocol.write0.([BII)I"] = function(data, o
 
 Native["com/sun/midp/io/j2me/socket/Protocol.setSockOpt0.(II)V"] = function(option, value) {
     if (!(option in this.options)) {
-        throw $.newIllegalArgumentException("Unsupported socket option");
+        $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "Unsupported socket option");
+        return;
     }
 
     this.options[option] = value;
@@ -189,7 +187,8 @@ Native["com/sun/midp/io/j2me/socket/Protocol.setSockOpt0.(II)V"] = function(opti
 
 Native["com/sun/midp/io/j2me/socket/Protocol.getSockOpt0.(I)I"] = function(option) {
     if (!(option in this.options)) {
-        throw new $.newIllegalArgumentException("Unsupported socket option");
+        $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "Unsupported socket option");
+        return;
     }
 
     return this.options[option];

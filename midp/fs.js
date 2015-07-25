@@ -87,8 +87,7 @@ function(filenameBase, name, ext) {
         asyncImpl("I", new Promise(function(resolve, reject) {
             fs.open(path, function(fd) {
                 if (fd == -1) {
-                    ctx.setAsCurrentContext();
-                    reject($.newIOException("openRecordStoreFile: open failed"));
+                    reject({ name: J2ME.IOExceptionStr, msg: "openRecordStoreFile: open failed" });
                 } else {
                     resolve(fd); // handle
                 }
@@ -102,11 +101,13 @@ function(filenameBase, name, ext) {
         // Per the reference impl, create the file if it doesn't exist.
         var dirname = fs.dirname(path);
         if (!fs.mkdirp(dirname)) {
-            throw $.newIOException("openRecordStoreFile: mkdirp failed");
+            $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "openRecordStoreFile: mkdirp failed");
+            return;
         }
 
         if (!fs.create(path, new Blob())) {
-            throw $.newIOException("openRecordStoreFile: create failed");
+            $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "openRecordStoreFile: create failed");
+            return;
         }
 
         open();
@@ -123,7 +124,8 @@ Native["com/sun/midp/rms/RecordStoreFile.readBytes.(I[BII)I"] = function(handle,
     var readBytes = fs.read(handle, from, to);
 
     if (readBytes.byteLength <= 0) {
-        throw $.newIOException("handle invalid or segment indices out of bounds");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "handle invalid or segment indices out of bounds");
+        return;
     }
 
     var subBuffer = buf.subarray(offset, offset + readBytes.byteLength);
@@ -179,11 +181,13 @@ function(suiteId, jStoreName, headerDataSize) {
 Native["com/sun/midp/rms/RecordStoreSharedDBHeader.shareCachedData0.(I[BI)I"] = function(lookupId, headerData, headerDataSize) {
     var sharedHeader = MIDP.RecordStoreCache[lookupId];
     if (!sharedHeader) {
-        throw $.newIllegalStateException("invalid header lookup ID");
+        $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr, "invalid header lookup ID");
+        return;
     }
 
     if (!headerData) {
-        throw $.newIllegalArgumentException("header data is null");
+        $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "header data is null");
+        return;
     }
 
     var size = headerDataSize;
@@ -200,11 +204,13 @@ Native["com/sun/midp/rms/RecordStoreSharedDBHeader.updateCachedData0.(I[BII)I"] 
 function(lookupId, headerData, headerDataSize, headerVersion) {
     var sharedHeader = MIDP.RecordStoreCache[lookupId];
     if (!sharedHeader) {
-        throw $.newIllegalStateException("invalid header lookup ID");
+        $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr, "invalid header lookup ID");
+        return;
     }
 
     if (!headerData) {
-        throw $.newIllegalArgumentException("header data is null");
+        $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "header data is null");
+        return;
     }
 
     if (sharedHeader.headerVersion > headerVersion && sharedHeader.headerData) {
@@ -225,7 +231,8 @@ function(lookupId, headerData, headerDataSize, headerVersion) {
 Native["com/sun/midp/rms/RecordStoreSharedDBHeader.getHeaderRefCount0.(I)I"] = function(lookupId) {
     var sharedHeader = MIDP.RecordStoreCache[lookupId];
     if (!sharedHeader) {
-        throw $.newIllegalStateException("invalid header lookup ID");
+        $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr, "invalid header lookup ID");
+        return;
     }
 
     return sharedHeader.refCount;
@@ -285,7 +292,8 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.create.()V"] = function() {
     var stat = fs.stat(pathname);
 
     if (stat !== null || !fs.create(pathname, new Blob())) {
-        throw $.newIOException("error creating " + pathname);
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "error creating " + pathname);
+        return;
     }
 };
 
@@ -325,7 +333,8 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.delete.()V"] = function() {
     }
 
     if (!fs.remove(pathname)) {
-        throw $.newIOException();
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr);
+        return;
     }
 };
 
@@ -336,11 +345,13 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.rename0.(Ljava/lang/String;)
     DEBUG_FS && console.log("DefaultFileHandler.rename0: " + pathname + " to " + newPathname);
 
     if (fs.exists(newPathname)) {
-        throw $.newIOException("file with new name exists");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "file with new name exists");
+        return;
     }
 
     if (!fs.rename(pathname, newPathname)) {
-        throw $.newIOException("error renaming file");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "error renaming file");
+        return;
     }
 };
 
@@ -355,11 +366,13 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.truncate.(J)V"] = function(b
     var stat = fs.stat(pathname);
 
     if (!stat) {
-        throw $.newIOException("file does not exist");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "file does not exist");
+        return;
     }
 
     if (stat.isDir) {
-        throw $.newIOException("file is directory");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "file is directory");
+        return;
     }
 
     // TODO: If the file is open, flush it first.
@@ -417,7 +430,8 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.setReadable.(Z)V"] = functio
     }
 
     if (!fs.exists(pathname)) {
-        throw $.newIOException("file does not exist");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "file does not exist");
+        return;
     }
 
     // Otherwise this is a noop, as files are always readable in our filesystem.
@@ -432,7 +446,8 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.setWritable.(Z)V"] = functio
     }
 
     if (!fs.exists(pathname)) {
-        throw $.newIOException("file does not exist");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "file does not exist");
+        return;
     }
 
     // Otherwise this is a noop, as files are always writable in our filesystem.
@@ -445,7 +460,8 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.mkdir.()V"] = function() {
     DEBUG_FS && console.log("DefaultFileHandler.mkdir: " + pathname);
 
     if (!fs.mkdir(pathname)) {
-        throw $.newIOException("error creating " + pathname);
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "error creating " + pathname);
+        return;
     };
 };
 
@@ -498,11 +514,13 @@ MIDP.openFileHandler = function(fileHandler, mode) {
     var stat = fs.stat(pathname);
 
     if (!stat) {
-        throw $.newIOException("file does not exist");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "file does not exist");
+        return;
     }
 
     if (stat.isDir) {
-        throw $.newIOException("file is a directory");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "file is a directory");
+        return;
     }
 
     var ctx = $.ctx;
@@ -510,8 +528,7 @@ MIDP.openFileHandler = function(fileHandler, mode) {
     asyncImpl("V", new Promise(function(resolve, reject) {
         fs.open(pathname, function(fd) {
             if (fd === -1) {
-              ctx.setAsCurrentContext();
-              reject($.newIOException("Failed to open file handler for " + pathname));
+              reject({ name: J2ME.IOExceptionStr, msg: "Failed to open file handler for " + pathname });
               return;
             }
             fileHandler.nativeDescriptor = fd;
@@ -580,7 +597,8 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.read.([BII)I"] = function(b,
     var fd = this.nativeDescriptor;
 
     if (off < 0 || len < 0 || off > b.byteLength || (b.byteLength - off) < len) {
-        throw $.newIOException();
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr);
+        return;
     }
 
     if (b.byteLength == 0 || len == 0) {
@@ -623,14 +641,14 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.write.([BII)I"] = function(b
     DEBUG_FS && console.log("DefaultFileHandler.write: " + J2ME.fromJavaString(this.nativePath) + " " + off + "+" + len);
     if (this.nativeDescriptor === -1) {
         DEBUG_FS && console.log("DefaultFileHandler.write: ignored file");
-        return preemptingImpl("I", len);
+        return len;
     }
 
     var fd = this.nativeDescriptor;
     fs.write(fd, b, off, len);
     // The return value is the "length of data really written," which is
     // always the same as the length requested in our implementation.
-    return preemptingImpl("I", len);
+    return len;
 };
 
 Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.positionForWrite.(J)V"] = function(offset) {
@@ -682,10 +700,12 @@ Native["com/sun/cdc/io/j2me/file/DefaultFileHandler.openDir.()J"] = function() {
         var files = fs.list(pathname);
     } catch(ex) {
         if (ex.message == "Path does not exist") {
-            throw $.newIOException("Directory does not exist: file://" + pathname);
+            $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "Directory does not exist: file://" + pathname);
+            return;
         }
         if (ex.message == "Path is not a directory") {
-            throw $.newIOException("Connection is open on a file: file://" + pathname);
+            $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "Connection is open on a file: file://" + pathname);
+            return;
         }
     }
 
@@ -750,8 +770,7 @@ Native["com/sun/midp/io/j2me/storage/RandomAccessStream.open.(Ljava/lang/String;
         asyncImpl("I", new Promise(function(resolve, reject) {
             fs.open(path, function(fd) {
                 if (fd == -1) {
-                    ctx.setAsCurrentContext();
-                    reject($.newIOException("RandomAccessStream::open(" + path + ") failed opening the file"));
+                    reject({ name: J2ME.IOExceptionStr, msg: "RandomAccessStream::open(" + path + ") failed opening the file" });
                 } else {
                     resolve(fd);
                 }
@@ -762,11 +781,13 @@ Native["com/sun/midp/io/j2me/storage/RandomAccessStream.open.(Ljava/lang/String;
     if (fs.exists(path)) {
         open();
     } else if (mode == 1) {
-        throw $.newIOException("RandomAccessStream::open(" + path + ") file doesn't exist");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "RandomAccessStream::open(" + path + ") file doesn't exist");
+        return;
     } else if (fs.create(path, new Blob())) {
         open();
     } else {
-        throw $.newIOException("RandomAccessStream::open(" + path + ") failed creating the file");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "RandomAccessStream::open(" + path + ") failed creating the file");
+        return;
     }
 };
 
@@ -804,7 +825,8 @@ Native["com/sun/midp/io/j2me/storage/RandomAccessStream.sizeOf.(I)I"] = function
     var size = fs.getsize(handle);
 
     if (size == -1) {
-        throw $.newIOException("RandomAccessStream::sizeOf(" + handle + ") failed");
+        $.ctx.pushExceptionThrow(J2ME.IOExceptionStr, "RandomAccessStream::sizeOf(" + handle + ") failed");
+        return;
     }
 
     return size;

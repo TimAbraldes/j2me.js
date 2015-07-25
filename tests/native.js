@@ -18,15 +18,13 @@ Native["gnu/testlet/vm/NativeTest.getIntReturnLong.(I)J"] = function(val) {
 };
 
 Native["gnu/testlet/vm/NativeTest.throwException.()V"] = function() {
-  throw $.newNullPointerException("An exception");
+  $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr, "An exception");
 };
 
 Native["gnu/testlet/vm/NativeTest.throwExceptionAfterPause.()V"] = function() {
-  var ctx = $.ctx;
   asyncImpl("V", new Promise(function(resolve, reject) {
     setTimeout(function() {
-      ctx.setAsCurrentContext();
-      reject($.newNullPointerException("An exception"))
+      reject({ name: J2ME.NullPointerExceptionStr, msg: "An exception" });
     }, 100);
   }));
 };
@@ -105,7 +103,7 @@ Native["gnu/testlet/TestHarness.getNumDifferingPixels.(Ljava/lang/String;)I"] = 
 
     img.onerror = function() {
       console.error("Error while loading image: " + img.src);
-      reject($.newException("Error while loading image: " + img.src));
+      reject({ name: J2ME.ExceptionStr, msg: "Error while loading image: " + img.src });
     }
     img.onload = function() {
       var expectedCanvas = document.createElement('canvas');
@@ -119,7 +117,7 @@ Native["gnu/testlet/TestHarness.getNumDifferingPixels.(Ljava/lang/String;)I"] = 
         var message = "Width (got: " + gotCanvas.width + ", expected: " + expectedCanvas.width + "), " +
                       "height (got: " + gotCanvas.height + ", expected: " + expectedCanvas.width + ")";
         console.error(message);
-        reject($.newException(message));
+        reject({ name: J2ME.ExceptionStr, msg: message });
         return;
       }
 

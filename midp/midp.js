@@ -653,7 +653,8 @@ var MIDP = (function() {
     }
 
     if (!mutex) {
-      throw $.newIllegalStateException("Invalid mutex ID");
+      $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr, "Invalid mutex ID");
+      return;
     }
 
     if (!mutex.locked) {
@@ -663,7 +664,8 @@ var MIDP = (function() {
     }
 
     if (mutex.holder == ctx.runtime.isolate.id) {
-      throw $.newRuntimeException("Attempting to lock mutex twice within the same Isolate");
+      $.ctx.pushExceptionThrow(J2ME.RuntimeExceptionStr, "Attempting to lock mutex twice within the same Isolate");
+      return;
     }
 
     asyncImpl("V", new Promise(function(resolve, reject) {
@@ -685,15 +687,18 @@ var MIDP = (function() {
     }
 
     if (!mutex) {
-      throw $.newIllegalStateException("Invalid mutex ID");
+      $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr, "Invalid mutex ID");
+      return;
     }
 
     if (!mutex.locked) {
-      throw $.newRuntimeException("Mutex is not locked");
+      $.ctx.pushExceptionThrow(J2ME.RuntimeExceptionStr, "Mutex is not locked");
+      return;
     }
 
     if (mutex.holder !== $.ctx.runtime.isolate.id) {
-      throw $.newRuntimeException("Mutex is locked by different Isolate");
+      $.ctx.pushExceptionThrow(J2ME.RuntimeExceptionStr, "Mutex is locked by different Isolate");
+      return;
     }
 
     mutex.locked = false;
@@ -960,7 +965,8 @@ var MIDP = (function() {
         data = JARStore.loadFileFromJAR("java/classes.jar", "l10n/en-US.json");
 
         if (!data) {
-          throw $.newIOException();
+          $.ctx.pushExceptionThrow(J2ME.IOExceptionStr);
+          return;
         }
       }
 
@@ -970,7 +976,8 @@ var MIDP = (function() {
     var value = MIDP.localizedStrings[id];
 
     if (!value) {
-      throw $.newIllegalStateException("String with ID (" + id + ") doesn't exist");
+      $.ctx.pushExceptionThrow(J2ME.IllegalStateExceptionStr, "String with ID (" + id + ") doesn't exist");
+      return;
     }
 
     return J2ME.newString(value);
@@ -1250,7 +1257,8 @@ var MIDP = (function() {
   addUnimplementedNative("com/nokia/mid/ui/VirtualKeyboard.suppressSizeChanged.(Z)V");
 
   Native["com/nokia/mid/ui/VirtualKeyboard.getCustomKeyboardControl.()Lcom/nokia/mid/ui/CustomKeyboardControl;"] = function() {
-    throw $.newIllegalArgumentException("VirtualKeyboard::getCustomKeyboardControl() not implemented")
+    $.ctx.pushExceptionThrow(J2ME.IllegalArgumentExceptionStr, "VirtualKeyboard::getCustomKeyboardControl() not implemented")
+      return;
   };
 
   var keyboardVisibilityListener = null;

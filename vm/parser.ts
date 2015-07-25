@@ -549,7 +549,7 @@ module J2ME {
               r = classInfo.getMethodByName(name, type);
             }
             if (!r) {
-              throw $.newRuntimeException(classInfo.getClassNameSlow() + "." + fromUTF8(name) + "." + fromUTF8(type) + " not found");
+              return;
             }
             // Set the method/field as resolved only if it was actually found, otherwise a new attempt to
             // resolve this method/field will not fail with a RuntimeException.
@@ -892,12 +892,14 @@ module J2ME {
       var b = this.offset;
       var s = this.skip(6);
       var count = s.readU2();
+      //console.log("scanMethodInfoAttributes - " + this.implKey);
       for (var i = 0; i < count; i++) {
         var attribute_name_index = s.readU2();
         var attribute_length = s.readU4();
         var o = s.offset;
         var attribute_name = this.classInfo.constantPool.resolveUtf8(attribute_name_index);
         if (strcmp(attribute_name, UTF8.Code)) {
+        //console.log("FOUND CODE");
           this.codeAttribute = new CodeAttribute(s);
           this.exception_table_length = s.readU2();
           this.exception_table_offset = s.offset;
@@ -962,6 +964,7 @@ module J2ME {
 
   export class ClassInfo extends ByteStream {
     constantPool: ConstantPool = null;
+    initializingCtx: Context = null;
 
     utf8Name: Uint8Array = null;
     utf8SuperName: Uint8Array = null;

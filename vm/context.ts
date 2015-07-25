@@ -84,37 +84,43 @@ module J2ME {
 
     static dirtyStack: Frame [] = [];
 
-    /**
-     * Denotes the start of the context frame stack.
-     */
-    static Start: Frame = Frame.create(null, null);
-
-    /**
-     * Marks a frame set.
-     */
-    static Marker: Frame = Frame.create(null, null);
-
-    static isMarker(frame: Frame) {
-      return frame.methodInfo === null;
-    }
-
     constructor(methodInfo: MethodInfo, local: any []) {
       frameCount ++;
       this.stack = [];
       this.reset(methodInfo, local);
     }
 
+    static nativeCodeVoid: Uint8Array = new Uint8Array([Bytecodes.INVOKEJS, Bytecodes.RETURN]);
+    static nativeCodeLReturn: Uint8Array = new Uint8Array([Bytecodes.INVOKEJS, Bytecodes.LRETURN]);
+    static nativeCodeIReturn: Uint8Array = new Uint8Array([Bytecodes.INVOKEJS, Bytecodes.IRETURN]);
+
     reset(methodInfo: MethodInfo, local: any []) {
       this.methodInfo = methodInfo;
-      this.code = methodInfo ? methodInfo.codeAttribute.code : null;
       this.pc = 0;
       this.opPC = 0;
       this.stack.length = 0;
       this.local = local;
       this.lockObject = null;
+
+      if (!methodInfo.isNative && methodInfo.state !== MethodState.Compiled) {
+        this.code = methodInfo.codeAttribute ? methodInfo.codeAttribute.code : null;
+        if (!this.code) {
+          console.log("no code for " + methodInfo.implKey);
+        }
+        return;
+      }
+
+      if (methodInfo.returnKind === Kind.Void) {
+        this.code = Frame.nativeCodeVoid;
+      } else if (isTwoSlot(methodInfo.returnKind)) {
+        this.code = Frame.nativeCodeLReturn;
+      } else {
+        this.code = Frame.nativeCodeIReturn;
+      }
     }
 
     static create(methodInfo: MethodInfo, local: any []): Frame {
+    //console.log("Frame.create, methodInfo=" + methodInfo);
       var dirtyStack = Frame.dirtyStack;
       if (dirtyStack.length) {
         var frame = dirtyStack.pop();
@@ -126,7 +132,6 @@ module J2ME {
     }
 
     free() {
-      release || assert(!Frame.isMarker(this), "Freeing a marker frame");
       Frame.dirtyStack.push(this);
     }
 
@@ -268,22 +273,6 @@ module J2ME {
       return this.stack[i];
     }
 
-    popArgumentsInto(methodInfo: MethodInfo, args): any [] {
-      var stack = this.stack;
-      var signatureKinds = methodInfo.signatureKinds;
-      var argumentSlots = methodInfo.argumentSlots;
-      for (var i = 1, j = stack.length - argumentSlots, k = 0; i < signatureKinds.length; i++) {
-        args[k++] = stack[j++];
-        if (isTwoSlot(signatureKinds[i])) {
-          j++;
-        }
-      }
-      release || assert(j === stack.length && k === signatureKinds.length - 1, "lengths don't match in popArgumentsInto");
-      stack.length -= argumentSlots;
-      args.length = k;
-      return args;
-    }
-
     toString() {
       return this.methodInfo.implKey + " " + this.pc;
     }
@@ -314,10 +303,12 @@ module J2ME {
       console.log(s);
     });
 
+    private static ctxs: Context [] = [];
+
     id: number;
 
     /**
-     * Are we currently unwinding the stack because of a Yield?
+     * Are we currently unwinding the stack?
      */
     U: J2ME.VMState = J2ME.VMState.Running;
 
@@ -328,27 +319,9 @@ module J2ME {
     paused: boolean = true;
 
     /*
-     * Contains method frames separated by special frame instances called marker frames. These
-     * mark the position in the frame stack where the interpreter starts execution.
-     *
-     * During normal execution, a marker frame is inserted on every call to |executeFrame|, so
-     * the stack looks something like:
-     *
-     *     frame stack: [start, f0, m, f1, m, f2]
-     *                   ^          ^      ^
-     *                   |          |      |
-     *   js call stack:  I ........ I .... I ...
-     *
-     * After unwinding, the frame stack is compacted:
-     *
-     *     frame stack: [start, f0, f1, f2]
-     *                   ^       ^
-     *                   |       |
-     *   js call stack:  I ..... I .......
-     *
+     * Contains method frames
      */
     private frames: Frame [];
-    bailoutFrames: Frame [];
     lockTimeout: number;
     lockLevel: number;
     thread: java.lang.Thread;
@@ -358,7 +331,6 @@ module J2ME {
     constructor(public runtime: Runtime) {
       var id = this.id = Context._nextId ++;
       this.frames = [];
-      this.bailoutFrames = [];
       this.runtime = runtime;
       this.runtime.addContext(this);
       this.virtualRuntime = 0;
@@ -417,6 +389,35 @@ module J2ME {
       return frames[frames.length - 1];
     }
 
+    pushExceptionThrow(className: string, msg?: string) {
+      this.setAsCurrentContext();
+
+      try {
+        var classInfo = CLASSES.getClass("org/mozilla/internal/Sys");
+        var methodInfo = classInfo.getMethodByNameString("throwException", "(Ljava/lang/Exception;)V");
+        var frame = Frame.create(methodInfo, []);
+        this.pushFrame(frame);
+
+        if (!msg) {
+          msg = "";
+        }
+        msg = "" + msg;
+
+        classInfo = CLASSES.loadAndLinkClass(className);
+        runtimeCounter && runtimeCounter.count("createException " + className);
+        var exception = new classInfo.klass();
+        frame.local[0] = exception;
+
+        methodInfo = classInfo.getMethodByNameString("<init>", "(Ljava/lang/String;)V");
+        frame = Frame.create(methodInfo, [exception, newString(msg)]);
+        this.pushFrame(frame);
+
+        this.runtime.maybePushClassInit(classInfo);
+      } finally {
+        this.clearCurrentContext();
+      }
+    }
+
     popFrame(): Frame {
       var frame = this.frames.pop();
       if (profile) {
@@ -432,60 +433,10 @@ module J2ME {
       this.frames.push(frame);
     }
 
-    private popMarkerFrame() {
-      var marker = this.frames.pop();
-      release || assert (Frame.isMarker(marker), "popMarkerFrame popped non marker");
-    }
-
-    // NB: This does not set this Context as the current context. This must only
-    // be called on the current context.
-    executeFrame(frame: Frame) {
-      var frames = this.frames;
-      frames.push(Frame.Marker);
-      this.pushFrame(frame);
-
-      try {
-        var returnValue = VM.execute();
-        if (this.U) {
-          // Prepend all frames up until the first marker to the bailout frames.
-          while (true) {
-            var frame = frames.pop();
-            if (Frame.isMarker(frame)) {
-              break;
-            }
-            this.bailoutFrames.unshift(frame);
-          }
-          return;
-        }
-      } catch (e) {
-        this.popMarkerFrame();
-        throwHelper(e);
-      }
-      this.popMarkerFrame();
-      return returnValue;
-    }
-
-    createException(className: string, message?: string) {
-      if (!message) {
-        message = "";
-      }
-      message = "" + message;
-      var classInfo = CLASSES.loadAndLinkClass(className);
-      classInitCheck(classInfo);
-      release || Debug.assert(!this.U, "Unexpected unwind during createException.");
-      runtimeCounter && runtimeCounter.count("createException " + className);
-      var exception = new classInfo.klass();
-      var methodInfo = classInfo.getMethodByNameString("<init>", "(Ljava/lang/String;)V");
-      preemptionLockLevel++;
-      getLinkedMethod(methodInfo).call(exception, message ? newString(message) : null);
-      release || Debug.assert(!this.U, "Unexpected unwind during createException.");
-      preemptionLockLevel--;
-      return exception;
-    }
-
-    setAsCurrentContext() {
+    private setAsCurrentContext() {
       if ($) {
         threadTimeline && threadTimeline.leave();
+        Context.ctxs.push($.ctx);
       }
       threadTimeline && threadTimeline.enter(this.runtime.id + ":" + this.id);
       $ = this.runtime;
@@ -496,16 +447,19 @@ module J2ME {
       Context.setWriters(this.writer);
     }
 
-    clearCurrentContext() {
+    private clearCurrentContext() {
       if ($) {
         threadTimeline && threadTimeline.leave();
       }
-      $ = null;
+      var ctx = Context.ctxs.pop();
+      $ = ctx ? ctx.runtime : null;
       Context.setWriters(Context.writer);
     }
 
+    // NB: This runs while a different context is technically active,
+    // so any logging of this function appears as if it is coming
+    // from the other context.
     start(frames: Frame[]) {
-      this.frames.push(Frame.Start);
       for (var i = 0; i < frames.length; i++) {
         this.pushFrame(frames[i]);
       }
@@ -515,35 +469,25 @@ module J2ME {
     execute() {
       this.setAsCurrentContext();
       profile && this.resumeMethodTimeline();
-      do {
-        VM.execute();
-        if (this.U) {
-          if (this.bailoutFrames.length) {
-            Array.prototype.push.apply(this.frames, this.bailoutFrames);
-            this.bailoutFrames = [];
-          }
-          var frames = this.frames;
-          switch (this.U) {
-            case VMState.Yielding:
-              this.resume();
-              break;
-            case VMState.Pausing:
-              break;
-            case VMState.Stopping:
-              this.clearCurrentContext();
-              this.kill();
-              return;
-          }
-          this.U = VMState.Running;
-          this.clearCurrentContext();
-          return;
-        }
-      } while (this.current() !== Frame.Start);
+
+      VM.execute();
       this.clearCurrentContext();
-      this.kill();
+
+      if (VMState.Stopping === this.U || this.frames.length === 0) {
+        this.kill();
+        return;
+      }
+
+      if (VMState.Running === this.U) {
+        Scheduler.enqueue(this);
+      }
     }
 
+    // NB: This runs while a different context is technically active,
+    // so any logging of this function appears as if it is coming
+    // from the other context (or no context at all).
     resume() {
+      this.U = VMState.Running;
       Scheduler.enqueue(this);
     }
 
@@ -558,7 +502,7 @@ module J2ME {
         var ctx = obj._lock[queue].pop();
         if (!ctx)
           continue;
-          ctx.wakeup(obj)
+        ctx.wakeup(obj)
         if (!notifyAll)
           break;
       }
@@ -572,23 +516,15 @@ module J2ME {
       if (obj._lock.level !== 0) {
         obj._lock.ready.push(this);
       } else {
+        this.resume();
         while (this.lockLevel-- > 0) {
           this.monitorEnter(obj);
-          if (this.U === VMState.Pausing || this.U === VMState.Stopping) {
-            return;
-          }
         }
-        this.resume();
       }
     }
 
     monitorEnter(object: java.lang.Object) {
       var lock = object._lock;
-      if (lock && lock.level === 0) {
-        lock.ctx = this;
-        lock.level = 1;
-        return;
-      }
       if (!lock) {
         object._lock = new Lock(this, 1);
         return;
@@ -597,31 +533,43 @@ module J2ME {
         ++lock.level;
         return;
       }
+      if (lock.level === 0) {
+        lock.ctx = this;
+        lock.level = 1;
+        return;
+      }
       this.block(object, "ready", 1);
     }
 
-    monitorExit(object: java.lang.Object) {
+    monitorExit(object: java.lang.Object): boolean {
       var lock = object._lock;
-      if (lock.level === 1 && lock.ready.length === 0) {
-        lock.level = 0;
-        return;
+      if (lock.ctx !== this || lock.level === 0) {
+        this.pushExceptionThrow(IllegalMonitorStateExceptionStr);
+        return false;
       }
-      if (lock.ctx !== this)
-        throw $.newIllegalMonitorStateException();
       if (--lock.level > 0) {
-        return;
+        return true;
       }
-      this.unblock(object, "ready", false);
+      if (lock.ready.length > 0) {
+        this.unblock(object, "ready", false);
+      }
+      return true;
     }
 
-    wait(object: java.lang.Object, timeout) {
+    wait(object: java.lang.Object, timeout: number): boolean {
       var lock = object._lock;
-      if (timeout < 0)
-        throw $.newIllegalArgumentException();
-      if (!lock || lock.ctx !== this)
-        throw $.newIllegalMonitorStateException();
+      if (timeout < 0) {
+        this.pushExceptionThrow(IllegalArgumentExceptionStr);
+        return false;
+      }
+      if (!lock || lock.ctx !== this || lock.level === 0) {
+        this.pushExceptionThrow(IllegalMonitorStateExceptionStr);
+        return false;
+      }
       var lockLevel = lock.level;
       for (var i = lockLevel; i > 0; i--) {
+        // This can technically throw an exception but we've already
+        // checked the condition that could cause that to happen
         this.monitorExit(object);
       }
       if (timeout) {
@@ -639,23 +587,17 @@ module J2ME {
         this.lockTimeout = null;
       }
       this.block(object, "waiting", lockLevel);
+      return true;
     }
 
     notify(obj, notifyAll) {
-      if (!obj._lock || obj._lock.ctx !== this)
-        throw $.newIllegalMonitorStateException();
+      if (!obj._lock || obj._lock.ctx !== this || obj._lock.level === 0) {
+        this.pushExceptionThrow(IllegalMonitorStateExceptionStr);
+        return false;
+      }
 
       this.unblock(obj, "waiting", notifyAll);
-    }
-
-    bailout(methodInfo: MethodInfo, pc: number, nextPC: number, local: any [], stack: any [], lockObject: java.lang.Object) {
-      // perfWriter && perfWriter.writeLn("C Unwind: " + methodInfo.implKey);
-      var frame = Frame.create(methodInfo, local);
-      frame.stack = stack;
-      frame.pc = nextPC;
-      frame.opPC = pc;
-      frame.lockObject = lockObject;
-      this.bailoutFrames.unshift(frame);
+      return true;
     }
 
     pauseMethodTimeline() {
@@ -685,9 +627,6 @@ module J2ME {
     restartMethodTimeline() {
       for (var i = 0; i < this.frames.length; i++) {
         var frame = this.frames[i];
-        if (J2ME.Frame.isMarker(frame)) {
-          continue;
-        }
         this.methodTimeline.enter(frame.methodInfo.implKey, MethodType.Interpreted);
       }
 
@@ -706,15 +645,6 @@ module J2ME {
       if (profiling) {
         this.methodTimeline.leave(key, MethodType[methodType]);
       }
-    }
-
-
-    yield(reason: string) {
-      unwindCount ++;
-      threadWriter && threadWriter.writeLn("yielding " + reason);
-      runtimeCounter && runtimeCounter.count("yielding " + reason);
-      this.U = VMState.Yielding;
-      profile && this.pauseMethodTimeline();
     }
 
     pause(reason: string) {

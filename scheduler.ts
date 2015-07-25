@@ -11,28 +11,25 @@ module J2ME {
   /**
    * Maximum time in ms that all of the threads have to run before the event
    * loop is run.
-   * NOTE: this number is somewhat arbitrarily chosen, but the thought is
-   * we'd like the system to respond in under 100ms, so by using 80ms we then
-   * have 20ms to get an event, start processing it, and render an update.
+   *
+   * To be able to animate at 60fps, the screen needs to be repainted once
+   * every 16.666ms. This value MUST be set lower than that number for us
+   * to have a chance of animating at 60fps.
+   *
    * @const
    */
-  var MAX_WINDOW_EXECUTION_TIME: number = 80;
+  var MAX_WINDOW_EXECUTION_TIME: number = 11;
 
   /**
    * Number of ms between preemption checks, chosen arbitrarily.
    * @const
    */
-  var PREEMPTION_INTERVAL: number = 5;
+  var PREEMPTION_INTERVAL: number = 1;
 
   /**
    * Time when the last preemption check was allowed.
    */
   var lastPreemptionCheck: number = 0;
-
-  /**
-   * Number of preemption checks thus far.
-   */
-  export var preemptionCount: number = 0;
 
   /**
    * Time when the window began execution.
@@ -45,11 +42,6 @@ module J2ME {
    * in the execution window and when `updateCurrentRuntime` is called.
    */
   var threadTrackingTime: number = 0;
-
-  /**
-   * Used to block preemptions from happening during code that can't handle them.
-   */
-  export var preemptionLockLevel: number = 0;
 
   /**
    * All of the currently runnable threads. Sorted in ascending order by virtualRuntime.
@@ -170,6 +162,16 @@ module J2ME {
     private static updateCurrentRuntime() {
       var now = performance.now();
       var ctx = current;
+      if (!ctx) {
+        // TODO: HOW DOES THIS HAPPEN!?
+        console.log("updateCurrentRuntime with null current!");
+        try {
+          throw new Error();
+        } catch (e) {
+          console.log(e.stack);
+        }
+        return;
+      }
       var executionTime = now - threadTrackingTime;
       var weightedExecutionTime = executionTime * currentTimeScale;
       ctx.virtualRuntime += weightedExecutionTime;
@@ -178,18 +180,12 @@ module J2ME {
     }
 
     static shouldPreempt(): boolean {
-      if (preemptionLockLevel > 0) {
-        return false;
-      }
       var now = performance.now();
       var totalElapsed = now - windowStartTime;
       if (totalElapsed > MAX_WINDOW_EXECUTION_TIME) {
-        preemptionCount++;
-        threadWriter && threadWriter.writeLn("Execution window timeout: " + totalElapsed.toFixed(2) + " ms, samples: " + PS + ", count: " + preemptionCount);
+        threadWriter && threadWriter.writeLn("Execution window timeout: " + totalElapsed.toFixed(2) + " ms");
         return true;
       }
-
-      Scheduler.updateCurrentRuntime();
 
       var elapsed = now - lastPreemptionCheck;
       if (elapsed < PREEMPTION_INTERVAL) {
@@ -202,9 +198,10 @@ module J2ME {
         return false;
       }
 
+      Scheduler.updateCurrentRuntime();
+
       if ($.ctx.virtualRuntime > runningQueue[0].virtualRuntime) {
-        preemptionCount++;
-        threadWriter && threadWriter.writeLn("Preemption: " + elapsed.toFixed(2) + " ms, samples: " + PS + ", count: " + preemptionCount);
+        threadWriter && threadWriter.writeLn("Preemption: " + elapsed.toFixed(2) + " ms");
         return true;
       }
 

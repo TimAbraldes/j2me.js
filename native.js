@@ -15,60 +15,70 @@ function asyncImpl(returnKind, promise) {
     } else {
       // void, do nothing
     }
-    J2ME.Scheduler.enqueue(ctx);
-  }, function(exception) {
-    var classInfo = CLASSES.getClass("org/mozilla/internal/Sys");
-    var methodInfo = classInfo.getMethodByNameString("throwException", "(Ljava/lang/Exception;)V", true);
-    ctx.pushFrame(Frame.create(methodInfo, [exception]));
-    J2ME.Scheduler.enqueue(ctx);
+    ctx.resume();
+  }, function(javaExceptionInfo) {
+    if (!javaExceptionInfo.name) {
+      console.error("asyncImpl rejections must specify name of Java Exception to raise");
+      javaExceptionInfo.name = J2ME.ExceptionStr;
+    }
+    ctx.pushExceptionThrow(javaExceptionInfo.name, javaExceptionInfo.msg);
+    ctx.resume();
   });
   $.ctx.pause(asyncImplStringAsync);
 }
 
-function preemptingImpl(returnKind, returnValue) {
-  if (J2ME.Scheduler.shouldPreempt()) {
-      asyncImpl(returnKind, Promise.resolve(returnValue));
-      return;
+function arraycopyHelper(src, dst, srcKlass, dstKlass, to, from) {
+  var obj = src[from];
+  if (obj && !J2ME.isAssignableTo(obj.klass, dstKlass.elementKlass)) {
+      $.ctx.pushExceptionThrow(J2ME.ArrayStoreExceptionStr, "Incompatible component types.");
+      return false;
   }
-  return returnValue;
+  dst[to] = obj;
+  return true;
 }
 
 var Native = {};
 
 Native["java/lang/System.arraycopy.(Ljava/lang/Object;ILjava/lang/Object;II)V"] = function(src, srcOffset, dst, dstOffset, length) {
-    if (!src || !dst)
-        throw $.newNullPointerException("Cannot copy to/from a null array.");
+    if (!src || !dst) {
+        $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr, "Cannot copy to/from a null array.");
+        return;
+    }
     var srcKlass = src.klass;
     var dstKlass = dst.klass;
 
-    if (!srcKlass.isArrayKlass || !dstKlass.isArrayKlass)
-        throw $.newArrayStoreException("Can only copy to/from array types.");
-    if (srcOffset < 0 || (srcOffset+length) > src.length || dstOffset < 0 || (dstOffset+length) > dst.length || length < 0)
-        throw $.newArrayIndexOutOfBoundsException("Invalid index.");
+    if (!srcKlass.isArrayKlass || !dstKlass.isArrayKlass) {
+        $.ctx.pushExceptionThrow(J2ME.ArrayStoreExceptionStr, "Can only copy to/from array types.");
+        return;
+    }
+    if (srcOffset < 0 || (srcOffset+length) > src.length || dstOffset < 0 || (dstOffset+length) > dst.length || length < 0) {
+        $.ctx.pushExceptionThrow(J2ME.ArrayIndexOutOfBoundsExceptionStr, "Invalid index.");
+        return;
+    }
     var srcIsPrimitive = !(src instanceof Array);
     var dstIsPrimitive = !(dst instanceof Array);
     if ((srcIsPrimitive && dstIsPrimitive && srcKlass !== dstKlass) ||
         (srcIsPrimitive && !dstIsPrimitive) ||
         (!srcIsPrimitive && dstIsPrimitive)) {
-        throw $.newArrayStoreException("Incompatible component types: " + srcKlass + " -> " + dstKlass);
+        $.ctx.pushExceptionThrow(J2ME.ArrayStoreExceptionStr, "Incompatible component types: " + srcKlass + " -> " + dstKlass);
+        return;
     }
     if (!dstIsPrimitive) {
         if (srcKlass != dstKlass && !J2ME.isAssignableTo(srcKlass.elementKlass, dstKlass.elementKlass)) {
-            var copy = function(to, from) {
-                var obj = src[from];
-                if (obj && !J2ME.isAssignableTo(obj.klass, dstKlass.elementKlass)) {
-                    throw $.newArrayStoreException("Incompatible component types.");
-                }
-                dst[to] = obj;
-            };
             if (dst !== src || dstOffset < srcOffset) {
-                for (var n = 0; n < length; ++n)
-                    copy(dstOffset++, srcOffset++);
+                for (var n = 0; n < length; ++n) {
+                    if (!arraycopyHelper(src, dst, srcKlass, dstKlass, dstOffset++, srcOffset++)) {
+                        return;
+                    }
+                }
             } else {
                 dstOffset += length;
                 srcOffset += length;
-                for (var n = 0; n < length; ++n)
-                    copy(--dstOffset, --srcOffset);
+                for (var n = 0; n < length; ++n) {
+                    if (!arraycopyHelper(src, dst, srcKlass, dstKlass, --dstOffset, --srcOffset)) {
+                        return;
+                    }
+                }
             }
             return;
         }
@@ -317,9 +327,9 @@ Native["java/lang/Class.invoke_clinit.()V"] = function() {
     var classInfo = this.runtimeKlass.templateKlass.classInfo;
     var className = classInfo.getClassNameSlow();
     var clinit = classInfo.staticInitializer;
-    J2ME.preemptionLockLevel++;
     if (clinit && clinit.classInfo.getClassNameSlow() === className) {
-        $.ctx.executeFrame(Frame.create(clinit, []));
+        $.ctx.pushFrame(Frame.create(clinit, []));
+        classInfo.initializingCtx = $.ctx;
     }
 };
 
@@ -328,8 +338,8 @@ Native["java/lang/Class.invoke_verify.()V"] = function() {
 };
 
 Native["java/lang/Class.init9.()V"] = function() {
+    this.runtimeKlass.initializingCtx = null;
     $.setClassInitialized(this.runtimeKlass);
-    J2ME.preemptionLockLevel--;
 };
 
 Native["java/lang/Class.getName.()Ljava/lang/String;"] = function() {
@@ -337,19 +347,20 @@ Native["java/lang/Class.getName.()Ljava/lang/String;"] = function() {
 };
 
 Native["java/lang/Class.forName0.(Ljava/lang/String;)V"] = function(name) {
-  var classInfo = null;
+  if (!name) {
+    $.ctx.pushExceptionThrow(J2ME.ClassNotFoundExceptionStr, "Attempted to find blank class name");
+    return;
+  }
+  var className = J2ME.fromJavaString(name).replace(/\./g, "/");
+  var classInfo;
   try {
-    if (!name)
-      throw new J2ME.ClassNotFoundException();
-    var className = J2ME.fromJavaString(name).replace(/\./g, "/");
     classInfo = CLASSES.getClass(className);
   } catch (e) {
-    if (e instanceof (J2ME.ClassNotFoundException))
-      throw $.newClassNotFoundException("'" + e.message + "' not found.");
-    throw e;
+    $.ctx.pushExceptionThrow(J2ME.ClassNotFoundExceptionStr, "Class " + e.message + " not found.");
+    return;
   }
-  // The following can trigger an unwind.
-  J2ME.classInitCheck(classInfo);
+  $.maybePushClassInit(classInfo);
+  return;
 };
 
 Native["java/lang/Class.forName1.(Ljava/lang/String;)Ljava/lang/Class;"] = function(name) {
@@ -362,11 +373,13 @@ Native["java/lang/Class.forName1.(Ljava/lang/String;)Ljava/lang/Class;"] = funct
 Native["java/lang/Class.newInstance0.()Ljava/lang/Object;"] = function() {
   if (this.runtimeKlass.templateKlass.classInfo.isInterface ||
       this.runtimeKlass.templateKlass.classInfo.isAbstract) {
-    throw $.newInstantiationException("Can't instantiate interfaces or abstract classes");
+    $.ctx.pushExceptionThrow(J2ME.InstantiationExceptionStr, "Can't instantiate interfaces or abstract classes");
+    return;
   }
 
   if (this.runtimeKlass.templateKlass.classInfo instanceof J2ME.ArrayClassInfo) {
-    throw $.newInstantiationException("Can't instantiate array classes");
+    $.ctx.pushExceptionThrow(J2ME.InstantiationExceptionStr, "Can't instantiate array classes");
+    return;
   }
 
   return new this.runtimeKlass.templateKlass;
@@ -376,7 +389,8 @@ Native["java/lang/Class.newInstance1.(Ljava/lang/Object;)V"] = function(o) {
   // The following can trigger an unwind.
   var methodInfo = o.klass.classInfo.getLocalMethodByNameString("<init>", "()V", false);
   if (!methodInfo) {
-    throw $.newInstantiationException("Can't instantiate classes without a nullary constructor");
+    $.ctx.pushExceptionThrow(J2ME.InstantiationExceptionStr, "Can't instantiate classes without a nullary constructor");
+    return;
   }
   J2ME.getLinkedMethod(methodInfo).call(o);
 };
@@ -390,8 +404,10 @@ Native["java/lang/Class.isArray.()Z"] = function() {
 };
 
 Native["java/lang/Class.isAssignableFrom.(Ljava/lang/Class;)Z"] = function(fromClass) {
-    if (!fromClass)
-        throw $.newNullPointerException();
+    if (!fromClass) {
+        $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+        return;
+    }
     return J2ME.isAssignableTo(fromClass.runtimeKlass.templateKlass, this.runtimeKlass.templateKlass) ? 1 : 0;
 };
 
@@ -436,19 +452,42 @@ Native["java/lang/Double.longBitsToDouble.(J)D"] = (function() {
     }
 })();
 
+var noInfoStr = "(no info)";
 Native["java/lang/Throwable.fillInStackTrace.()V"] = function() {
-    this.stackTrace = [];
-    $.ctx.frames.forEach(function(frame) {
-        if (!frame.methodInfo)
-            return;
-        var methodInfo = frame.methodInfo;
-        var methodName = methodInfo.name;
-        if (!methodName)
-            return;
-        var classInfo = methodInfo.classInfo;
-        var className = classInfo.getClassNameSlow();
-        this.stackTrace.unshift({ className: className, methodName: methodName, methodSignature: methodInfo.signature, offset: frame.bci });
-    }.bind(this));
+  var len = $.ctx.frames.length;
+  this.stackTrace = new Array(len);
+  for (var i = 0; i < len; i++) {
+    var stackTraceItem = {
+      className: noInfoStr,
+      methodName: noInfoStr,
+      methodSignature: noInfoStr,
+      offset: noInfoStr
+    };
+
+    var frame = $.ctx.frames[len - i - 1];
+
+    if (frame.methodInfo) {
+      var mi = frame.methodInfo;
+      if (mi.name) {
+        stackTraceItem.methodName = mi.name;
+      }
+      if (mi.classInfo) {
+        stackTraceItem.className = mi.classInfo.getClassNameSlow();
+      }
+      if (mi.signature) {
+        stackTraceItem.methodSignature = mi.signature;
+        if (mi.isNative) {
+          stackTraceItem.methodSignature += " (native)";
+        }
+      }
+    }
+
+    if (undefined !== frame.bci) {
+      stackTraceItem.offset = frame.bci;
+    }
+
+    this.stackTrace[i] = stackTraceItem;
+  }
 };
 
 Native["java/lang/Throwable.obtainBackTrace.()Ljava/lang/Object;"] = function() {
@@ -539,8 +578,10 @@ Native["java/lang/Thread.setPriority0.(II)V"] = function(oldPriority, newPriorit
 Native["java/lang/Thread.start0.()V"] = function() {
     // The main thread starts during bootstrap and don't allow calling start()
     // on already running threads.
-    if (this === $.ctx.runtime.mainThread || this.alive)
-        throw $.newIllegalThreadStateException();
+    if (this === $.ctx.runtime.mainThread || this.alive) {
+        $.ctx.pushExceptionThrow(J2ME.IllegalThreadStateExceptionStr);
+        return;
+    }
     this.alive = true;
     this.pid = util.id();
     // Create a context for the thread and start it.
@@ -557,13 +598,19 @@ Native["java/lang/Thread.isAlive.()Z"] = function() {
 };
 
 Native["java/lang/Thread.sleep.(J)V"] = function(delay) {
-    asyncImpl("V", new Promise(function(resolve, reject) {
-        window.setTimeout(resolve, delay.toNumber());
-    }));
+    var ctx = $.ctx;
+    ctx.pause("Thread.sleep");
+    window.setTimeout(function() {
+      ctx.resume();
+    }, delay.toNumber());
 };
 
 Native["java/lang/Thread.yield.()V"] = function() {
-    $.ctx.yield("Thread.yield");
+    var ctx = $.ctx;
+    ctx.pause("Thread.yield");
+    window.nextTickDuringEvents(function() {
+      ctx.resume();
+    });
 };
 
 Native["java/lang/Thread.activeCount.()I"] = function() {
@@ -647,7 +694,8 @@ Native["com/sun/cldc/isolate/Isolate.registerNewIsolate.()V"] = function() {
 };
 
 Native["com/sun/cldc/isolate/Isolate.getStatus.()I"] = function() {
-    return this.runtime ? this.runtime.status : J2ME.RuntimeStatus.New;
+    var ret = this.runtime ? this.runtime.status : J2ME.RuntimeStatus.New;
+    return ret;
 };
 
 Native["com/sun/cldc/isolate/Isolate.nativeStart.()V"] = function() {
@@ -727,7 +775,8 @@ Native["java/io/DataOutputStream.UTFToBytes.(Ljava/lang/String;)[B"] = function(
     }
 
     if (utflen > 65535) {
-        throw $.newUTFDataFormatException();
+        $.ctx.pushExceptionThrow(J2ME.UTFDataFormatExceptionStr);
+        return;
     }
 
     var count = 0;
@@ -885,7 +934,8 @@ Native["com/nokia/mid/impl/jms/core/Launcher.handleContent.(Ljava/lang/String;)V
     // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/img#Supported_image_formats
     if (["jpg", "jpeg", "gif", "apng", "png", "bmp", "ico"].indexOf(ext) == -1) {
         console.error("File not supported: " + fileName);
-        throw $.newException("File not supported: " + fileName);
+        $.ctx.pushExceptionThrow(J2ME.ExceptionStr, "File not supported: " + fileName);
+        return;
     }
 
     // `fileName` is supposed to be a full path, but we don't support
@@ -895,7 +945,8 @@ Native["com/nokia/mid/impl/jms/core/Launcher.handleContent.(Ljava/lang/String;)V
     var imgData = fs.getBlob("/" + fileName);
     if (!imgData) {
         console.error("File not found: " + fileName);
-        throw $.newException("File not found: " + fileName);
+        $.ctx.pushExceptionThrow(J2ME.ExceptionStr, "File not found: " + fileName);
+        return;
     }
 
     var maskId = "image-launcher";
@@ -975,7 +1026,8 @@ Native["org/mozilla/internal/Sys.stopProfile.()V"] = function() {
 Native["java/io/ByteArrayOutputStream.write.([BII)V"] = function(b, off, len) {
   if ((off < 0) || (off > b.length) || (len < 0) ||
       ((off + len) > b.length)) {
-    throw $.newIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.IndexOutOfBoundsExceptionStr);
+    return;
   }
 
   if (len == 0) {
@@ -1015,7 +1067,8 @@ Native["java/io/ByteArrayOutputStream.write.(I)V"] = function(value) {
 
 Native["java/io/ByteArrayInputStream.init.([BII)V"] = function(buf, offset, length) {
   if (!buf) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
 
   this.buf = buf;
@@ -1029,12 +1082,14 @@ Native["java/io/ByteArrayInputStream.read.()I"] = function() {
 
 Native["java/io/ByteArrayInputStream.read.([BII)I"] = function(b, off, len) {
   if (!b) {
-    throw $.newNullPointerException();
+    $.ctx.pushExceptionThrow(J2ME.NullPointerExceptionStr);
+    return;
   }
 
   if ((off < 0) || (off > b.length) || (len < 0) ||
       ((off + len) > b.length)) {
-    throw $.newIndexOutOfBoundsException();
+    $.ctx.pushExceptionThrow(J2ME.IndexOutOfBoundsExceptionStr);
+    return;
   }
 
   if (this.pos >= this.count) {

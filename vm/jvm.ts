@@ -21,7 +21,6 @@ module J2ME {
       ctx.thread.alive = true;
       // The constructor will set the real priority, however one is needed for the scheduler.
       ctx.thread.priority = NORMAL_PRIORITY;
-      runtime.preInitializeClasses(ctx);
       return ctx;
     }
 

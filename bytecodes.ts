@@ -360,6 +360,8 @@ module J2ME.Bytecode {
     RESOLVED_PUTFIELD      = 214,
     RESOLVED_INVOKEVIRTUAL = 215,
 
+    INVOKEJS             = 216,
+
     ILLEGAL              = 255,
     END                  = 256,
 

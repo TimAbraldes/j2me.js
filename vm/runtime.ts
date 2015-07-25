@@ -37,7 +37,6 @@ interface AOTMetaData {
 
 declare var throwHelper;
 declare var throwPause;
-declare var throwYield;
 
 module J2ME {
   declare var Native, config;
@@ -49,7 +48,7 @@ module J2ME {
   /**
    * Turns on just-in-time compilation of methods.
    */
-  export var enableRuntimeCompilation = true;
+  export var enableRuntimeCompilation = false;
 
   /**
    * Turns on onStackReplacement
@@ -443,25 +442,6 @@ module J2ME {
       this._runtimeId = RuntimeTemplate._nextRuntimeId ++;
       this._nextHashCode = this._runtimeId << 24;
     }
-    
-    preInitializeClasses(ctx: Context) {
-      var prevCtx = $ ? $.ctx : null;
-      var preInit = CLASSES.preInitializedClasses;
-      ctx.setAsCurrentContext();
-      for (var i = 0; i < preInit.length; i++) {
-        var runtimeKlass = this.getRuntimeKlass(preInit[i].klass);
-        preemptionLockLevel++;
-        var methodInfo = runtimeKlass.classObject.klass.classInfo.getMethodByNameString("initialize", "()V");
-        runtimeKlass.classObject[methodInfo.virtualName]();
-        // runtimeKlass.classObject.initialize();
-        release || Debug.assert(!ctx.U, "Unexpected unwind during preInitializeClasses.");
-        preemptionLockLevel-- ;
-      }
-      ctx.clearCurrentContext();
-      if (prevCtx) {
-        prevCtx.setAsCurrentContext();
-      }
-    }
 
     /**
      * After class intialization is finished the init9 method will invoke this so
@@ -531,149 +511,73 @@ module J2ME {
     }
 
     setStatic(field, value) {
+    //console.log("setStatic(" + field.id + ", " + value + ")");
       this.staticFields[field.id] = value;
     }
 
     getStatic(field) {
-      return this.staticFields[field.id];
+      var ret = this.staticFields[field.id];
+      //console.log("getStatic(" + field.id + ")=" + ret);
+      return ret;
     }
 
-    newIOException(str?: string): java.io.IOException {
-      return <java.io.IOException>$.ctx.createException(
-        "java/io/IOException", str);
+    initializeClassObject(runtimeKlass: RuntimeKlass) {
+      linkWriter && linkWriter.writeLn("Initializing Class Object For: " + runtimeKlass.templateKlass);
+      release || assert(!runtimeKlass.classObject, "class object already initialized");
+      runtimeKlass.classObject = <java.lang.Class><any>new Klasses.java.lang.Class();
+      runtimeKlass.classObject.runtimeKlass = runtimeKlass;
+      var fields = runtimeKlass.templateKlass.classInfo.getFields();
+      var className = runtimeKlass.templateKlass.classInfo.getClassNameSlow();
+      if (className === "java/lang/Object" ||
+          className === "java/lang/Class" ||
+          className === "java/lang/String" ||
+          className === "java/lang/Thread") {
+        (<any>runtimeKlass.classObject).status = 4;
+        this.setClassInitialized(runtimeKlass);
+        return;
+      }
+      for (var i = 0; i < fields.length; i++) {
+        var field = fields[i];
+        if (field.isStatic) {
+          var kind = getSignatureKind(field.utf8Signature);
+          var defaultValue;
+          switch (kind) {
+            case Kind.Reference:
+              defaultValue = null;
+              break;
+            case Kind.Long:
+              defaultValue = Long.ZERO;
+              break;
+            default:
+              defaultValue = 0;
+              break;
+          }
+          field.set(<java.lang.Object><any>runtimeKlass, defaultValue);
+        }
+      }
     }
 
-    newUnsupportedEncodingException(str?: string): java.io.UnsupportedEncodingException {
-      return <java.io.UnsupportedEncodingException>$.ctx.createException(
-        "java/io/UnsupportedEncodingException", str);
+    maybePushClassInit(classInfo: ClassInfo): boolean {
+      if (classInfo instanceof ArrayClassInfo || this.initialized[classInfo.getClassNameSlow()] || classInfo.initializingCtx === this.ctx) {
+        return true;
+      }
+      linkKlass(classInfo);
+      var runtimeKlass = this.getRuntimeKlass(classInfo.klass);
+      var initializeMethodInfo = runtimeKlass.classObject.klass.classInfo.getMethodByNameString("initialize", "()V");
+      runtimeKlass.classObject[initializeMethodInfo.virtualName]();
+      return false;
     }
-
-    newUTFDataFormatException(str?: string): java.io.UTFDataFormatException {
-      return <java.io.UTFDataFormatException>$.ctx.createException(
-        "java/io/UTFDataFormatException", str);
-    }
-
-    newSecurityException(str?: string): java.lang.SecurityException {
-      return <java.lang.SecurityException>$.ctx.createException(
-        "java/lang/SecurityException", str);
-    }
-
-    newIllegalThreadStateException(str?: string): java.lang.IllegalThreadStateException {
-      return <java.lang.IllegalThreadStateException>$.ctx.createException(
-        "java/lang/IllegalThreadStateException", str);
-    }
-
-    newRuntimeException(str?: string): java.lang.RuntimeException {
-      return <java.lang.RuntimeException>$.ctx.createException(
-        "java/lang/RuntimeException", str);
-    }
-
-    newIndexOutOfBoundsException(str?: string): java.lang.IndexOutOfBoundsException {
-      return <java.lang.IndexOutOfBoundsException>$.ctx.createException(
-        "java/lang/IndexOutOfBoundsException", str);
-    }
-
-    newArrayIndexOutOfBoundsException(str?: string): java.lang.ArrayIndexOutOfBoundsException {
-      return <java.lang.ArrayIndexOutOfBoundsException>$.ctx.createException(
-        "java/lang/ArrayIndexOutOfBoundsException", str);
-    }
-
-    newStringIndexOutOfBoundsException(str?: string): java.lang.StringIndexOutOfBoundsException {
-      return <java.lang.StringIndexOutOfBoundsException>$.ctx.createException(
-        "java/lang/StringIndexOutOfBoundsException", str);
-    }
-
-    newArrayStoreException(str?: string): java.lang.ArrayStoreException {
-      return <java.lang.ArrayStoreException>$.ctx.createException(
-        "java/lang/ArrayStoreException", str);
-    }
-
-    newIllegalMonitorStateException(str?: string): java.lang.IllegalMonitorStateException {
-      return <java.lang.IllegalMonitorStateException>$.ctx.createException(
-        "java/lang/IllegalMonitorStateException", str);
-    }
-
-    newClassCastException(str?: string): java.lang.ClassCastException {
-      return <java.lang.ClassCastException>$.ctx.createException(
-        "java/lang/ClassCastException", str);
-    }
-
-    newArithmeticException(str?: string): java.lang.ArithmeticException {
-      return <java.lang.ArithmeticException>$.ctx.createException(
-        "java/lang/ArithmeticException", str);
-    }
-
-    newClassNotFoundException(str?: string): java.lang.ClassNotFoundException {
-      return <java.lang.ClassNotFoundException>$.ctx.createException(
-        "java/lang/ClassNotFoundException", str);
-    }
-
-    newIllegalArgumentException(str?: string): java.lang.IllegalArgumentException {
-      return <java.lang.IllegalArgumentException>$.ctx.createException(
-        "java/lang/IllegalArgumentException", str);
-    }
-
-    newIllegalStateException(str?: string): java.lang.IllegalStateException {
-      return <java.lang.IllegalStateException>$.ctx.createException(
-        "java/lang/IllegalStateException", str);
-    }
-
-    newNegativeArraySizeException(str?: string): java.lang.NegativeArraySizeException {
-      return <java.lang.NegativeArraySizeException>$.ctx.createException(
-        "java/lang/NegativeArraySizeException", str);
-    }
-
-    newNullPointerException(str?: string): java.lang.NullPointerException {
-      return <java.lang.NullPointerException>$.ctx.createException(
-        "java/lang/NullPointerException", str);
-    }
-
-    newMediaException(str?: string): javax.microedition.media.MediaException {
-      return <javax.microedition.media.MediaException>$.ctx.createException(
-        "javax/microedition/media/MediaException", str);
-    }
-
-    newInstantiationException(str?: string): java.lang.InstantiationException {
-      return <java.lang.InstantiationException>$.ctx.createException(
-        "java/lang/InstantiationException", str);
-    }
-
-    newException(str?: string): java.lang.Exception {
-      return <java.lang.Exception>$.ctx.createException(
-        "java/lang/Exception", str);
-    }
-
   }
 
   export enum VMState {
     Running = 0,
-    Yielding = 1,
-    Pausing = 2,
-    Stopping = 3
+    Pausing = 1,
+    Stopping = 2
   }
 
   export class Runtime extends RuntimeTemplate {
     private static _nextId: number = 0;
     id: number;
-
-    /**
-     * Bailout callback whenever a JIT frame is unwound.
-     */
-    B(pc: number, nextPC: number, local: any [], stack: any [], lockObject: java.lang.Object) {
-      var methodInfo = jitMethodInfos[(<any>arguments.callee.caller).name];
-      release || assert(methodInfo !== undefined, "methodInfo undefined in B");
-      $.ctx.bailout(methodInfo, pc, nextPC, local, stack, lockObject);
-    }
-
-    /**
-     * Bailout callback whenever a JIT frame is unwound that uses a slightly different calling
-     * convetion that makes it more convenient to emit in some cases.
-     */
-    T(location: UnwindThrowLocation, local: any [], stack: any [], lockObject: java.lang.Object) {
-      var methodInfo = jitMethodInfos[(<any>arguments.callee.caller).name];
-      release || assert(methodInfo !== undefined, "methodInfo undefined in T");
-      $.ctx.bailout(methodInfo, location.getPC(), location.getNextPC(), local, stack.slice(0, location.getSP()), lockObject);
-    }
 
     constructor(jvm: JVM) {
       super(jvm);
@@ -783,63 +687,6 @@ module J2ME {
     }
   }
 
-  function initializeClassObject(runtimeKlass: RuntimeKlass) {
-    linkWriter && linkWriter.writeLn("Initializing Class Object For: " + runtimeKlass.templateKlass);
-    release || assert(!runtimeKlass.classObject, "bad runtimeKlass in initializeClassObject");
-    runtimeKlass.classObject = <java.lang.Class><any>new Klasses.java.lang.Class();
-    runtimeKlass.classObject.runtimeKlass = runtimeKlass;
-    var className = runtimeKlass.templateKlass.classInfo.getClassNameSlow();
-    if (className === "java/lang/Object" ||
-        className === "java/lang/Class" ||
-        className === "java/lang/String" ||
-        className === "java/lang/Thread") {
-      (<any>runtimeKlass.classObject).status = 4;
-      $.setClassInitialized(runtimeKlass);
-      return;
-    }
-    var fields = runtimeKlass.templateKlass.classInfo.getFields();
-    for (var i = 0; i < fields.length; i++) {
-      var field = fields[i];
-      if (field.isStatic) {
-        var kind = getSignatureKind(field.utf8Signature);
-        var defaultValue;
-        switch (kind) {
-          case Kind.Reference:
-            defaultValue = null;
-            break;
-          case Kind.Long:
-            defaultValue = Long.ZERO;
-            break;
-          default:
-            defaultValue = 0;
-            break;
-        }
-        field.set(<java.lang.Object><any>runtimeKlass, defaultValue);
-      }
-    }
-  }
-
-  /**
-   * Registers the klass as a getter on the runtime template. On first access, the getter creates a runtime klass and
-   * adds it to the runtime.
-   */
-  export function registerKlass(klass: Klass, classInfo: ClassInfo) {
-    linkWriter && linkWriter.writeLn("Registering Klass: " + classInfo.getClassNameSlow());
-    Object.defineProperty(RuntimeTemplate.prototype, classInfo.mangledName, {
-      configurable: true,
-      get: function () {
-        linkWriter && linkWriter.writeLn("Creating Runtime Klass: " + classInfo.getClassNameSlow());
-        release || assert(!(klass instanceof RuntimeKlass), "klass shouldn't be RuntimeKlass in registerKlass");
-        var runtimeKlass = new RuntimeKlass(klass);
-        initializeClassObject(runtimeKlass);
-        Object.defineProperty(this, classInfo.mangledName, {
-          value: runtimeKlass
-        });
-        return runtimeKlass;
-      }
-    });
-  }
-
   var unresolvedSymbols = Object.create(null);
 
   function findKlass(classInfo: ClassInfo) {
@@ -928,6 +775,27 @@ module J2ME {
       return classInfo.klass;
     }
     return makeKlass(classInfo);
+  }
+
+  /**
+   * Registers the klass as a getter on the runtime template. On first access, the getter creates a runtime klass and
+   * adds it to the runtime.
+   */
+  export function registerKlass(klass: Klass, classInfo: ClassInfo) {
+    linkWriter && linkWriter.writeLn("Registering Klass: " + classInfo.getClassNameSlow());
+    Object.defineProperty(RuntimeTemplate.prototype, classInfo.mangledName, {
+      configurable: true,
+      get: function () {
+        linkWriter && linkWriter.writeLn("Creating Runtime Klass: " + classInfo.getClassNameSlow());
+        release || assert(!(klass instanceof RuntimeKlass), "klass not RuntimeKlass");
+        var runtimeKlass = new RuntimeKlass(klass);
+        $.initializeClassObject(runtimeKlass);
+        Object.defineProperty(this, classInfo.mangledName, {
+          value: runtimeKlass
+        });
+        return runtimeKlass;
+      }
+    });
   }
 
   function makeKlass(classInfo: ClassInfo): Klass {
@@ -1134,7 +1002,7 @@ module J2ME {
     };
   }
 
-  function findNativeMethodImplementation(methodInfo: MethodInfo) {
+  function helper(methodInfo: MethodInfo) {
     // Look in bindings first.
     var binding = findNativeMethodBinding(methodInfo);
     if (binding) {
@@ -1155,6 +1023,25 @@ module J2ME {
     return null;
   }
 
+  function findNativeMethodImplementation(methodInfo: MethodInfo) {
+    var method = helper(methodInfo);
+    if (!method) {
+      return null;
+    }
+    return function() {
+    //console.log("native method " + methodInfo.implKey);
+      var ret = method.apply(this, arguments);
+      if ($.ctx.U) {
+        return;
+      }
+      var sigKinds = methodInfo.signatureKinds;
+      if (Kind.Void !== sigKinds[0]) {
+        $.ctx.current().stack.pushKind(sigKinds[0], ret);
+        //console.log("pushed " + ((ret && ret.klass) ? ret.klass.classInfo.getClassNameSlow() : ret));
+      }
+    }
+  }
+
   function prepareInterpretedMethod(methodInfo: MethodInfo): Function {
 
     // Adapter for the most common case.
@@ -1169,9 +1056,10 @@ module J2ME {
         for (var i = 0; i < slots; i++) {
           frame.local[j++] = arguments[i];
         }
-        return $.ctx.executeFrame(frame);
+        $.ctx.pushFrame(frame);
       };
       (<any>method).methodInfo = methodInfo;
+        //console.log("prepareInterpretedMethod. methodInfo=" + methodInfo);
       return method;
     }
 
@@ -1190,6 +1078,7 @@ module J2ME {
           frame.local[j++] = null;
         }
       }
+      $.ctx.pushFrame(frame);
       if (methodInfo.isSynchronized) {
         if (!frame.lockObject) {
           frame.lockObject = methodInfo.isStatic
@@ -1197,14 +1086,11 @@ module J2ME {
             : frame.local[0];
         }
         $.ctx.monitorEnter(frame.lockObject);
-        if ($.ctx.U === VMState.Pausing) {
-          $.ctx.pushFrame(frame);
-          return;
-        }
+        // NB: We rely on the interpet loop to check $.ctx.U after monitorenter
       }
-      return $.ctx.executeFrame(frame);
     };
     (<any>method).methodInfo = methodInfo;
+      //console.log("prepareInterpretedMethod. methodInfo=" + methodInfo);
     return method;
   }
 
@@ -1316,17 +1202,8 @@ module J2ME {
           default:
             r = fn.apply(this, arguments);
         }
-        if ($.ctx.U) {
+        if (ctx.U) {
           release || assert(ctx.paused, "context is paused");
-
-          if (methodInfo.isNative) {
-            // A fake frame that just returns is pushed so when the ctx resumes from the unwind
-            // the frame will be popped triggering a leaveMethodTimeline.
-            var fauxFrame = Frame.create(null, []);
-            fauxFrame.methodInfo = methodInfo;
-            fauxFrame.code = code;
-            ctx.bailoutFrames.unshift(fauxFrame);
-          }
         } else {
           ctx.leaveMethodTimeline(key, methodType);
         }
@@ -1353,7 +1230,7 @@ module J2ME {
     if (methodInfo.fn) {
       return methodInfo.fn;
     }
-    linkKlassMethod(methodInfo.classInfo.klass, methodInfo);
+    linkKlassMethod(getKlass(methodInfo.classInfo), methodInfo);
     assert (methodInfo.fn, "bad fn in getLinkedMethod");
     return methodInfo.fn;
   }
@@ -1409,7 +1286,6 @@ module J2ME {
       return;
     }
     linkWriter && linkWriter.enter("Link Klass Methods: " + klass);
-    var methods = klass.classInfo.getMethods();
 
     var vTable = klass.classInfo.vTable;
     if (vTable) {
@@ -1716,6 +1592,7 @@ module J2ME {
       klass.prototype[methodInfo.virtualName] = fn;
     }
 
+    // TODO: This talks about bailout code, can it be removed?
     // Make JITed code available in the |jitMethodInfos| so that bailout
     // code can figure out the caller.
     jitMethodInfos[mangledClassAndMethodName] = methodInfo;
@@ -1752,13 +1629,15 @@ module J2ME {
 
   export function checkCastKlass(object: java.lang.Object, klass: Klass) {
     if (object !== null && !isAssignableTo(object.klass, klass)) {
-      throw $.newClassCastException();
+      $.ctx.pushExceptionThrow(ClassCastExceptionStr);
+      return;
     }
   }
 
   export function checkCastInterface(object: java.lang.Object, klass: Klass) {
     if (object !== null && !isAssignableTo(object.klass, klass)) {
-      throw $.newClassCastException();
+      $.ctx.pushExceptionThrow(ClassCastExceptionStr);
+      return;
     }
   }
 
@@ -1784,9 +1663,6 @@ module J2ME {
   }
 
   export function newArray(klass: Klass, size: number) {
-    if (size < 0) {
-      throwNegativeArraySizeException();
-    }
     var constructor: any = getArrayKlass(klass);
     return new constructor(size);
   }
@@ -1804,7 +1680,8 @@ module J2ME {
   }
 
   export function throwNegativeArraySizeException() {
-    throw $.newNegativeArraySizeException();
+    $.ctx.pushExceptionThrow(NegativeArraySizeExceptionStr);
+    return;
   }
 
   export function newObjectArray(size: number): java.lang.Object[] {
@@ -1872,13 +1749,17 @@ module J2ME {
   export function checkDivideByZero(value: number) {
     if (value === 0) {
       throwArithmeticException();
+      return false;
     }
+    return true;
   }
 
   export function checkDivideByZeroLong(value: Long) {
     if (value.isZero()) {
       throwArithmeticException();
+      return false;
     }
+    return true;
   }
 
   /**
@@ -1890,29 +1771,37 @@ module J2ME {
    */
   export function checkArrayBounds(array: any [], index: number) {
     if ((index >>> 0) >= (array.length >>> 0)) {
-      throw $.newArrayIndexOutOfBoundsException(String(index));
+      $.ctx.pushExceptionThrow(ArrayIndexOutOfBoundsExceptionStr, String(index));
+      return false;
     }
+    return true;
   }
 
   export function throwArrayIndexOutOfBoundsException(index: number) {
-    throw $.newArrayIndexOutOfBoundsException(String(index));
+    $.ctx.pushExceptionThrow(ArrayIndexOutOfBoundsExceptionStr, String(index));
+    return
   }
 
   export function throwArithmeticException() {
-    throw $.newArithmeticException("/ by zero");
+    $.ctx.pushExceptionThrow(ArithmeticExceptionStr, "/ by zero");
+    return;
   }
 
-  export function checkArrayStore(array: java.lang.Object, value: any) {
+  export function checkArrayStore(array: java.lang.Object, value: any): boolean {
     var arrayKlass = array.klass;
     if (value && !isAssignableTo(value.klass, arrayKlass.elementKlass)) {
-      throw $.newArrayStoreException();
+      $.ctx.pushExceptionThrow(ArrayStoreExceptionStr);
+      return false;
     }
+    return true;
   }
 
-  export function checkNull(object: java.lang.Object) {
+  export function checkNull(object: java.lang.Object): boolean {
     if (!object) {
-      throw $.newNullPointerException();
+      $.ctx.pushExceptionThrow(NullPointerExceptionStr);
+      return false;
     }
+    return true;
   }
 
   export enum Constants {
@@ -1924,41 +1813,6 @@ module J2ME {
     CHAR_MAX = 65535,
     INT_MIN = -2147483648,
     INT_MAX =  2147483647
-  }
-
-  export function monitorEnter(object: J2ME.java.lang.Object) {
-    $.ctx.monitorEnter(object);
-  }
-
-  export function monitorExit(object: J2ME.java.lang.Object) {
-    $.ctx.monitorExit(object);
-  }
-
-  export function translateException(e) {
-    if (e.name === "TypeError") {
-      // JavaScript's TypeError is analogous to a NullPointerException.
-      return $.newNullPointerException(e.message);
-    }
-    return e;
-  }
-
-  var initializeMethodInfo = null;
-  export function classInitCheck(classInfo: ClassInfo) {
-    if (classInfo instanceof ArrayClassInfo || $.initialized[classInfo.getClassNameSlow()]) {
-      return;
-    }
-    linkKlass(classInfo);
-    var runtimeKlass = $.getRuntimeKlass(classInfo.klass);
-    if (!initializeMethodInfo) {
-      initializeMethodInfo = Klasses.java.lang.Class.classInfo.getMethodByNameString("initialize", "()V");
-    }
-    runtimeKlass.classObject[initializeMethodInfo.virtualName]();
-  }
-
-  export function preempt() {
-    if (Scheduler.shouldPreempt()) {
-      $.ctx.yield("preemption");
-    }
   }
 
   export class UnwindThrowLocation {
@@ -2030,6 +1884,28 @@ module J2ME {
   export function throwUnwind7(pc: number, nextPC: number = pc + 3) {
     throwUnwind(pc, nextPC, 7);
   }
+
+    export var IOExceptionStr: string =  "java/io/IOException";
+    export var UnsupportedEncodingExceptionStr: string =  "java/io/UnsupportedEncodingException";
+    export var UTFDataFormatExceptionStr: string =  "java/io/UTFDataFormatException";
+    export var SecurityExceptionStr: string =  "java/lang/SecurityException";
+    export var IllegalThreadStateExceptionStr: string =  "java/lang/IllegalThreadStateException";
+    export var RuntimeExceptionStr: string =  "java/lang/RuntimeException";
+    export var IndexOutOfBoundsExceptionStr: string =  "java/lang/IndexOutOfBoundsException";
+    export var ArrayIndexOutOfBoundsExceptionStr: string =  "java/lang/ArrayIndexOutOfBoundsException";
+    export var StringIndexOutOfBoundsExceptionStr: string =  "java/lang/StringIndexOutOfBoundsException";
+    export var ArrayStoreExceptionStr: string =  "java/lang/ArrayStoreException";
+    export var IllegalMonitorStateExceptionStr: string =  "java/lang/IllegalMonitorStateException";
+    export var ClassCastExceptionStr: string =  "java/lang/ClassCastException";
+    export var ArithmeticExceptionStr: string =  "java/lang/ArithmeticException";
+    export var ClassNotFoundExceptionStr: string =  "java/lang/ClassNotFoundException";
+    export var IllegalArgumentExceptionStr: string =  "java/lang/IllegalArgumentException";
+    export var IllegalStateExceptionStr: string =  "java/lang/IllegalStateException";
+    export var NegativeArraySizeExceptionStr: string =  "java/lang/NegativeArraySizeException";
+    export var NullPointerExceptionStr: string =  "java/lang/NullPointerException";
+    export var MediaExceptionStr: string =  "javax/microedition/media/MediaException";
+    export var InstantiationExceptionStr: string =  "java/lang/InstantiationException";
+    export var ExceptionStr: string =  "java/lang/Exception";
 }
 
 var Runtime = J2ME.Runtime;
@@ -2072,12 +1948,15 @@ var CDZL = J2ME.checkDivideByZeroLong;
 var CAB = J2ME.checkArrayBounds;
 var CAS = J2ME.checkArrayStore;
 
-var ME = J2ME.monitorEnter;
-var MX = J2ME.monitorExit;
-var TE = J2ME.translateException;
+var ME = function (object: J2ME.java.lang.Object) {
+  $.ctx.monitorEnter(object);
+}
+
+var MX = function (object: J2ME.java.lang.Object) {
+  $.ctx.monitorExit(object);
+}
+
+//var TE = J2ME.translateException;
 var TI = J2ME.throwArrayIndexOutOfBoundsException;
 var TA = J2ME.throwArithmeticException;
 var TN = J2ME.throwNegativeArraySizeException;
-
-var PE = J2ME.preempt;
-var PS = 0; // Preemption samples.

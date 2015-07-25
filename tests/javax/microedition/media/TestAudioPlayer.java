@@ -144,7 +144,9 @@ public class TestAudioPlayer implements MIDletTestlet, PlayerListener {
 
         // Replay the audio
         player.start();
-        Thread.sleep(50);
+        while (player.getMediaTime() < player.getDuration()) {
+          Thread.sleep(50);
+        }
 
         player.close();
     }

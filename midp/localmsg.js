@@ -19,8 +19,6 @@ var LocalMsgConnection = function() {
 }
 
 LocalMsgConnection.prototype.reset = function() {
-    var ctx = $.ctx;
-
     this.clientConnected = false;
     this.clientWaiting = [];
     this.clientMessages = [];
@@ -28,8 +26,6 @@ LocalMsgConnection.prototype.reset = function() {
         this.serverWaiting.shift()(false);
     }
     this.serverMessages = [];
-
-    ctx.setAsCurrentContext();
 }
 
 LocalMsgConnection.prototype.notifyConnection = function() {
@@ -37,16 +33,15 @@ LocalMsgConnection.prototype.notifyConnection = function() {
 
     if (this.waitingForConnection) {
         this.waitingForConnection();
+        this.waitingForConnection = null;
     }
 }
 
 LocalMsgConnection.prototype.waitConnection = function() {
-    return new Promise((function(resolve, reject) {
-      this.waitingForConnection = function() {
-          this.waitingForConnection = null;
-          resolve();
-      }
-    }).bind(this));
+    var conn = this;
+    return new Promise(function(resolve, reject) {
+      conn.waitingForConnection = resolve;
+    });
 }
 
 LocalMsgConnection.prototype.copyMessage = function(messageQueue, data) {
@@ -92,15 +87,13 @@ LocalMsgConnection.prototype.getServerMessage = function(data) {
 }
 
 LocalMsgConnection.prototype.waitServerMessage = function(data) {
-    var ctx = $.ctx;
 
     asyncImpl("I", new Promise((function(resolve, reject) {
         this.serverWaiting.push(function(successful) {
             if (successful) {
                 resolve(this.getServerMessage(data));
             } else {
-                ctx.setAsCurrentContext();
-                reject($.newIOException("Client disconnected"));
+                reject({ name: J2ME.IOExceptionStr, msg: "Client disconnected" });
             }
         }.bind(this));
     }).bind(this)));

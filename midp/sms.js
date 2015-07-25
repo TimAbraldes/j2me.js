@@ -186,7 +186,6 @@ Native["com/sun/midp/io/j2me/sms/Protocol.numberOfSegments0.([BIIZ)I"] = functio
 
 Native["com/sun/midp/io/j2me/sms/Protocol.send0.(IILjava/lang/String;II[B)I"] =
 function(handle, type, host, destPort, sourcePort, message) {
-    var ctx = $.ctx;
     asyncImpl("I", new Promise(function(resolve, reject) {
         var pipe = DumbPipe.open("mozActivity", {
             name: "new",
@@ -203,8 +202,7 @@ function(handle, type, host, destPort, sourcePort, message) {
                     break;
 
                 case "onerror":
-                    ctx.setAsCurrentContext();
-                    reject($.newIOException("Error while sending SMS message"));
+                    reject({ name: J2ME.IOExceptionStr, msg: "Error while sending SMS message" });
                     break;
             }
         });

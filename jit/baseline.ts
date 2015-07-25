@@ -22,13 +22,6 @@ module J2ME {
   export var baselineCounter = null; // new Metrics.Counter(true);
 
   /**
-   * The preemption check should be quick. We don't always want to measure
-   * time so we use a quick counter and mask to determine when to do the
-   * more expensive preemption check.
-   */
-  var preemptionSampleMask = 0xFF;
-
-  /**
    * Expressions to inline for commonly invoked methods.
    */
   var inlineMethods = {
@@ -49,7 +42,7 @@ module J2ME {
   /**
    * Emits optimization results inline as comments in the generated source.
    */
-  var emitDebugInfoComments = false;
+  var emitDebugInfoComments = true;
 
   /**
    * Emits control flow and yielding assertions.
@@ -102,11 +95,6 @@ module J2ME {
     }
     return privilegedMethods[methodInfo.implKey] = false;
   }
-
-  /**
-   * Emits preemption checks for methods that already yield.
-   */
-  export var emitCheckPreemption = true;
 
   export function baselineCompileMethod(methodInfo: MethodInfo, target: CompilationTarget): CompiledMethodInfo {
     var compileExceptions = true;
@@ -386,6 +374,8 @@ module J2ME {
           variables.push(k);
         }
       }
+      // TODO: We need to persist variables across calls to each function
+      // with different pc values
       if (variables.length > 0) {
         this.bodyEmitter.prependLn("var " + variables.join(",") + ";");
       }
@@ -628,12 +618,7 @@ module J2ME {
         }
       }
 
-      // Insert a preemption check after the OSR code so the pc
-      // and state will be stored. We can only do this if the
-      // method has the necessary unwinding code.
-      if (canYield(this.methodInfo)) {
-        this.emitPreemptionCheck(this.bodyEmitter, "pc");
-      }
+      // TODO: This is probably where we'd leave the function
 
       if (needsEntryDispatch) {
         var entryBlock = Relooper.addBlock("// Entry Dispatch Block");
@@ -1118,15 +1103,6 @@ module J2ME {
       emitter.enter("if(lk&&lk.level===0){lk.ctx=$.ctx;lk.level=1;}else{ME(" + object + ");");
       this.emitUnwind(emitter, String(this.pc), String(nextPC), true);
       emitter.leave("}");
-    }
-
-    private emitPreemptionCheck(emitter: Emitter, nextPC: string) {
-      if (!emitCheckPreemption || this.methodInfo.implKey in noPreemptMap) {
-        return;
-      }
-      emitter.writeLn("PS++;");
-      emitter.writeLn("if((PS&" + preemptionSampleMask + ")===0)PE();");
-      this.emitUnwind(emitter, String(nextPC), String(nextPC), true);
     }
 
     private emitMonitorExit(emitter: Emitter, object: string) {
